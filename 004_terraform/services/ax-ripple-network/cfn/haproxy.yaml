@@ -95,8 +95,25 @@ Resources:
         UserData:
           Fn::Base64: !Sub |
             #!/bin/bash -xe
-            set -euo pipefail
             exec > >(tee /var/log/haproxy-setup.log) 2>&1
+
+            # ----------------------------------------------------------------
+            # Install cfn-bootstrap — NOT bundled on Amazon Linux 2023
+            # ----------------------------------------------------------------
+            dnf install -y python3-pip
+            pip3 install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz
+            ln -sf /usr/local/bin/cfn-signal /opt/aws/bin/cfn-signal || true
+
+            # Always signal CloudFormation on exit (success or failure)
+            cfn_signal() {
+              /usr/local/bin/cfn-signal -e $1 \
+                --stack ${AWS::StackName} \
+                --resource HAProxyASG \
+                --region ${AWS::Region}
+            }
+            trap 'cfn_signal $?' EXIT
+
+            set -euo pipefail
 
             dnf update -y
             dnf install -y haproxy curl jq
@@ -160,11 +177,7 @@ Resources:
             mkdir -p /run/haproxy
             haproxy -c -f /etc/haproxy/haproxy.cfg
             systemctl start haproxy
-
-            /opt/aws/bin/cfn-signal -e $? \
-              --stack ${AWS::StackName} \
-              --resource HAProxyASG \
-              --region ${AWS::Region}
+            # cfn-signal is sent automatically by the EXIT trap above
 
   # ===========================================================================
   # Auto Scaling Group
