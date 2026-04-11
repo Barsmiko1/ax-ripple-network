@@ -114,11 +114,9 @@ Resources:
             set -euo pipefail
 
             # ----------------------------------------------------------------
-            # AL2023 ships curl-minimal which conflicts with the full curl pkg.
-            # Use --allowerasing so dnf can swap curl-minimal -> curl if needed,
-            # or just install haproxy and jq (curl-minimal is sufficient).
+            # AL2023 ships curl-minimal — do NOT install full curl (conflicts).
+            # Skip dnf update to avoid slow/unnecessary package churn.
             # ----------------------------------------------------------------
-            dnf update -y
             dnf install -y haproxy jq
             # curl-minimal is already present on AL2023; no need to install curl
             systemctl enable haproxy
