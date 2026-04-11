@@ -258,7 +258,7 @@ Resources:
                 option httpchk
                 http-check send meth POST uri / ver HTTP/1.1 hdr Content-Type application/json hdr Content-Length 41 body "{\"method\":\"server_info\",\"params\":[{}]}"
                 http-check expect status 200
-                server-template api- 1-10 ${ApiNodeDiscoveryEndpoint}:51234 check resolvers dns init-addr none inter 5s fall 3 rise 2
+                server-template api- 2 ${ApiNodeDiscoveryEndpoint}:51234 check resolvers dns init-addr none inter 5s fall 3 rise 2
 
             backend rippled_ws
                 balance roundrobin
@@ -266,7 +266,7 @@ Resources:
                 tcp-check connect port 6006
                 stick-table type ip size 100k expire 30m
                 stick on src
-                server-template api- 1-10 ${ApiNodeDiscoveryEndpoint}:6006 check resolvers dns init-addr none inter 5s fall 3 rise 2
+                server-template api- 2 ${ApiNodeDiscoveryEndpoint}:6006 check resolvers dns init-addr none inter 5s fall 3 rise 2
 
             backend grafana_backend
                 balance roundrobin
