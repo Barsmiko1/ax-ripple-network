@@ -10,6 +10,12 @@
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
+# Resolve the latest Amazon Linux 2023 AMI ID via SSM at plan time (Terraform)
+# so CloudFormation receives a plain AMI ID string and never needs ssm:GetParameters.
+data "aws_ssm_parameter" "al2023_ami" {
+  name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64"
+}
+
 # =============================================================================
 # Shared Infrastructure — Remote State
 # =============================================================================
@@ -108,6 +114,7 @@ resource "aws_cloudformation_stack" "haproxy" {
     InstanceType             = var.haproxy_instance_type
     KeyPairName              = var.haproxy_key_pair_name
     ApiNodeDiscoveryEndpoint = aws_cloudformation_stack.ecs_services.outputs["ApiNodeDiscoveryEndpoint"]
+    AmiId                    = data.aws_ssm_parameter.al2023_ami.value
   }
 
   capabilities = ["CAPABILITY_NAMED_IAM"]
