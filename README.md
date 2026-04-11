@@ -19,154 +19,9 @@ and enable modular stack reuse.
 
 ### End-to-End Architecture Flow: Engineering, User, and Failover Perspectives
 
-> The following sequence diagram covers **three perspectives**: the software engineer's CI/CD & infra flow, the end-user's runtime traffic flow, and the HA failover testing flow — the most critical proof point for this architecture.
+> The following diagram covers **three perspectives**: the software engineer's CI/CD & infra flow, the end-user's runtime traffic flow, and the HA failover testing flow — the most critical proof point for this architecture.
 
-```mermaid
-sequenceDiagram
-    autonumber
-
-    %% Actors
-    participant Dev as 👤 Developer
-    participant GH as 🐙 GitHub
-    participant GHA as ▶️ GitHub Actions
-    participant ATL as 🔱 Atlantis
-    participant TF as 🔧 Terraform
-    participant CFN as ☁️ CloudFormation
-    participant AWS as 🟠 AWS
-    participant ACR as 📦 AWS ECR
-    participant ECS as 🚢 ECS Cluster
-    participant HA as 🟢 HAProxy
-    participant API as 🖥️ API Node
-    participant VAL as 🔒 rippled Validator
-    participant PROM as 📈 Prometheus
-    participant GRAF as 📊 Grafana
-    participant CLI as 🖥️ Client
-
-    %% =========================================================================
-    %% 1. SOFTWARE ENGINEER PERSPECTIVE (CI/CD + Infra Flow)
-    %% =========================================================================
-    rect rgb(59, 130, 246, 0.1)
-    Note over Dev, AWS: 1️⃣ Software Engineer Perspective — CI/CD + Infrastructure Flow
-
-    Dev->>GH: Push code (Terraform, CloudFormation, app, configs)
-
-    GH->>GHA: Trigger CI pipeline
-    activate GHA
-    GHA->>GHA: Run MegaLinter
-    GHA->>GHA: Run security checks (Renovate)
-    GHA->>GHA: Validate Terraform (fmt + validate)
-    opt Client build/test
-        GHA->>GHA: Build/test client
-    end
-    GHA-->>GH: Report status
-    deactivate GHA
-
-    GH->>ATL: Open PR triggers plan
-    ATL->>TF: Run terraform plan
-    TF->>CFN: Show stacks to create/update
-
-    alt PR merged
-        ATL->>TF: Run terraform apply
-        TF->>ACR: Push Docker images
-        TF->>AWS: Provision infra via aws_cloudformation_stack
-        loop Infra stacks (VPC → ECS → HAProxy → Observability)
-            TF->>CFN: Trigger stack
-            CFN->>AWS: Create resources (ECS, EC2, SGs, Monitoring)
-        end
-    else PR closed
-        ATL-->>GH: Close PR, no deployment
-    end
-
-    CFN->>ECS: Launch API nodes + validators
-    CFN->>HA: Launch EC2 instance
-    CFN->>PROM: Setup monitoring
-    CFN->>GRAF: Setup dashboards
-
-    par Observability feedback
-        ECS->>PROM: Send metrics
-        HA->>PROM: Send logs/metrics
-        PROM->>GRAF: Visualize dashboards
-    end
-
-    AWS-->>Dev: Notify deployment complete
-    end
-
-    %% =========================================================================
-    %% 2. END USER PERSPECTIVE (System Usage Flow)
-    %% =========================================================================
-    rect rgb(20, 184, 166, 0.1)
-    Note over CLI, VAL: 2️⃣ End User Perspective — System Usage Flow
-
-    CLI->>HA: HTTP request to endpoint (:80)
-    HA->>API: Forward HTTP request
-    API->>VAL: Query ledger
-    VAL-->>API: Ledger data
-    API-->>HA: Response
-    HA-->>CLI: Response
-
-    par WebSocket flow
-        CLI->>HA: WebSocket connect (:6006)
-        HA->>API: Forward WebSocket
-        API->>VAL: Subscribe to ledger events
-        VAL-->>API: Continuous updates
-        API-->>HA: Stream updates
-        HA-->>CLI: Stream updates
-    end
-
-    par Observability feedback
-        API->>PROM: Node health, request metrics
-        HA->>PROM: Health checks, logs
-        PROM->>GRAF: User/engineer views dashboards
-    end
-
-    Note over CLI, HA: 👤 User only sees single endpoint — backend is hidden
-    end
-
-    %% =========================================================================
-    %% 3. HA FAILOVER TESTING FLOW (MOST IMPORTANT)
-    %% =========================================================================
-    rect rgb(239, 68, 68, 0.1)
-    Note over Dev, GRAF: 3️⃣ HA Failover Testing Flow — MOST IMPORTANT
-
-    CLI->>HA: WebSocket connection established
-    HA->>API: Route to Node A (active)
-    API->>VAL: Ledger updates
-    VAL-->>API: Send updates
-    API-->>HA: Stream updates
-    HA-->>CLI: Stream updates
-
-    par Standby node
-        HA->>API: Health check Node B (standby)
-    end
-
-    opt Health check interval
-        HA->>API: Periodic health check (every 5s)
-    end
-
-    alt ⚡ Failure injected
-        Dev->>ECS: Stop Node A task (aws ecs stop-task)
-        ECS-->>HA: Node A becomes unhealthy
-        HA->>API: Health check fails (3 consecutive)
-        HA-->>CLI: WebSocket disconnect event
-        CLI->>HA: Attempt reconnect (exponential backoff)
-        HA->>API: Route to Node B (failover)
-        API->>VAL: Resume ledger updates
-        VAL-->>API: Send updates
-        API-->>HA: Stream updates
-        HA-->>CLI: Stream updates ✅
-    end
-
-    par Observability feedback
-        HA->>PROM: Node A DOWN, Node B UP
-        PROM->>GRAF: Failover event visible on dashboard
-        CLI-->>Dev: Logs: Disconnected → Reconnecting → Connected to new backend
-    end
-
-    AWS-->>Dev: System auto-recovers, no manual intervention ✅
-    end
-
-    Note over Dev, AWS: 🌍 Applies to Development, Staging, and Production environments
-```
+![End-to-End Architecture Flow](docs/images/e2e-flow.png)
 
 ### High-Level Infrastructure Overview
 
@@ -283,7 +138,10 @@ ax-ripple-network/
 ├── .mega-linter.yml                # Multi-language linter config
 ├── .gitignore
 ├── LICENSE
-└── README.md
+├── README.md
+└── docs/
+    └── images/
+        └── e2e-flow.svg            # Architecture flow diagram (3 perspectives)
 ```
 
 ## 🚀 Quick Start
@@ -302,12 +160,111 @@ ax-ripple-network/
 ```bash
 # 1a. Create OIDC identity provider for GitHub Actions
 #     (allows GitHub runners to assume IAM roles without static keys)
+#     Note: AWS no longer validates thumbprints for token.actions.githubusercontent.com
+#     but the CLI still requires at least one. Both known GitHub OIDC thumbprints are included.
 aws iam create-open-id-connect-provider \
   --url "https://token.actions.githubusercontent.com" \
   --client-id-list "sts.amazonaws.com" \
-  --thumbprint-list "6938fd4d98bab03faadb97b34396831e3780aea1"
+  --thumbprint-list "1c58a3a8518e8759bf075b76b750d4f2df264fcd" "6938fd4d98bab03faadb97b34396831e3780aea1"
 
-# 1b. Create IAM role for GitHub Actions (store ARN as GitHub org secret: AWS_ROLE_ARN)
+# 1b. Create IAM role for GitHub Actions
+#     THIS is the account-specific part — the trust policy locks access
+#     to YOUR GitHub org and repo. Replace <ACCOUNT_ID> and <YOUR_ORG>.
+aws iam create-role \
+  --role-name github-actions-role \
+  --assume-role-policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::<ACCOUNT_ID>:oidc-provider/token.actions.githubusercontent.com"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+        },
+        "StringLike": {
+          "token.actions.githubusercontent.com:sub": "repo:<YOUR_ORG>/ax-ripple-network:*"
+        }
+      }
+    }]
+  }'
+
+# Attach permissions the role needs for the full deployment scope.
+# Option A: Use AWS managed policies (broader, simpler)
+for policy in \
+  arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser \
+  arn:aws:iam::aws:policy/AmazonECS_FullAccess \
+  arn:aws:iam::aws:policy/AWSCloudFormationFullAccess \
+  arn:aws:iam::aws:policy/AmazonEC2FullAccess \
+  arn:aws:iam::aws:policy/AmazonVPCFullAccess \
+  arn:aws:iam::aws:policy/SecretsManagerReadWrite \
+  arn:aws:iam::aws:policy/CloudWatchLogsFullAccess \
+  arn:aws:iam::aws:policy/AmazonRoute53AutoNamingFullAccess; do
+  aws iam attach-role-policy --role-name github-actions-role --policy-arn "$policy"
+done
+
+# S3 + DynamoDB for Terraform state (no managed policy — use inline)
+aws iam put-role-policy \
+  --role-name github-actions-role \
+  --policy-name terraform-state-access \
+  --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject",
+          "s3:ListBucket"
+        ],
+        "Resource": [
+          "arn:aws:s3:::ax-ripple-network-terraform-state",
+          "arn:aws:s3:::ax-ripple-network-terraform-state/*"
+        ]
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:DeleteItem"
+        ],
+        "Resource": "arn:aws:dynamodb:*:*:table/ax-ripple-network-terraform-lock"
+      }
+    ]
+  }'
+
+# IAM pass-role (required for ECS task execution role + CloudFormation)
+aws iam put-role-policy \
+  --role-name github-actions-role \
+  --policy-name iam-pass-role \
+  --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Effect": "Allow",
+      "Action": [
+        "iam:PassRole",
+        "iam:GetRole",
+        "iam:CreateRole",
+        "iam:AttachRolePolicy",
+        "iam:PutRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:DeleteRole",
+        "iam:TagRole",
+        "iam:CreateInstanceProfile",
+        "iam:AddRoleToInstanceProfile",
+        "iam:RemoveRoleFromInstanceProfile",
+        "iam:DeleteInstanceProfile"
+      ],
+      "Resource": "arn:aws:iam::*:role/ax-ripple-*"
+    }]
+  }'
+
+# Store the role ARN as GitHub org secret: AWS_ROLE_ARN
 
 # 1c. Create Secrets Manager entries for Atlantis
 aws secretsmanager create-secret --name atlantis/github-token \
