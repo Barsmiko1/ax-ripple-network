@@ -34,7 +34,7 @@ locals {
 }
 
 # =============================================================================
-# 1. ECS Services Stack — Task Defs, Services, ECR Repos, Service Discovery
+# 1. ECS Services Stack — Task Defs, Services, Service Discovery
 # =============================================================================
 resource "aws_cloudformation_stack" "ecs_services" {
   name = "ax-ripple-${var.environment}-ecs-services"
@@ -56,20 +56,39 @@ resource "aws_cloudformation_stack" "ecs_services" {
     ApiNodeDesiredCount         = tostring(var.api_node_desired_count)
     TaskCpu                     = var.task_cpu
     TaskMemory                  = var.task_memory
-    # ValidatorPublicKeys is sourced from Secrets Manager (ax-ripple-<env>/validator-public-keys)
-    # and injected directly into containers via ECS task definition Secrets — not passed here.
   }
 
   capabilities = ["CAPABILITY_NAMED_IAM"]
+
+  # CFN rollback is intentionally ENABLED (default).
+  # When a deploy fails CFN rolls back to the last known-good revision.
+  # ECS Services and Task Definitions have DeletionPolicy:Retain in the CFN
+  # template so rollback never stops/deletes the currently-running tasks —
+  # it only reverts the task definition pointer on the service.
+  #
+  # Terraform taint behaviour:
+  #   Taint only occurs when the stack reaches ROLLBACK_COMPLETE (first-ever
+  #   create fails).  On an UPDATE failure CFN reaches UPDATE_ROLLBACK_COMPLETE
+  #   which Terraform treats as a successful update to the prior state — no
+  #   taint, no destroy+recreate on the next run.
+  #
+  # ignore_changes on template_body:
+  #   Terraform re-reads the file on every plan.  Cosmetic encoding differences
+  #   (em-dash vs replacement char, trailing newlines) show as a diff and
+  #   trigger an UPDATE even when nothing logical changed.
+  #   Image / param changes still apply because `parameters` is NOT ignored.
+  lifecycle {
+    ignore_changes = [template_body]
+  }
 
   tags = {
     Stack = "ecs-services"
   }
 
   timeouts {
-    create = "20m"
-    update = "20m"
-    delete = "20m"
+    create = "30m"
+    update = "30m"
+    delete = "30m"
   }
 }
 
@@ -92,6 +111,10 @@ resource "aws_cloudformation_stack" "haproxy" {
   }
 
   capabilities = ["CAPABILITY_NAMED_IAM"]
+
+  lifecycle {
+    ignore_changes = [template_body]
+  }
 
   depends_on = [aws_cloudformation_stack.ecs_services]
 
@@ -127,6 +150,10 @@ resource "aws_cloudformation_stack" "observability" {
   }
 
   capabilities = ["CAPABILITY_NAMED_IAM"]
+
+  lifecycle {
+    ignore_changes = [template_body]
+  }
 
   depends_on = [
     aws_cloudformation_stack.ecs_services,
