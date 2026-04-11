@@ -133,11 +133,25 @@ for inst in instances:
     if inst["Attributes"].get("AWS_INSTANCE_IPV4") == PRIVATE_IP:
         print(f"  Haproxy already registered at {PRIVATE_IP} ✓")
         sys.exit(0)
-    # Deregister stale
-    subprocess.run(["aws","servicediscovery","deregister-instance",
+    # Deregister stale — wait for operation to complete before registering
+    dereg = subprocess.run(["aws","servicediscovery","deregister-instance",
         "--service-id",SVC_ID,"--instance-id",inst["Id"],
-        "--region","${AWS_REGION}"], capture_output=True)
+        "--region","${AWS_REGION}","--output","json"],
+        capture_output=True, text=True)
     print(f"  Deregistered stale instance {inst['Id']}")
+    # Wait for deregister operation to reach SUCCESS/FAIL before proceeding
+    import time
+    op_id = json.loads(dereg.stdout).get("OperationId","") if dereg.returncode == 0 else ""
+    if op_id:
+        for _ in range(30):
+            op = json.loads(subprocess.run(
+                ["aws","servicediscovery","get-operation","--operation-id",op_id,
+                 "--region","${AWS_REGION}","--output","json"],
+                capture_output=True, text=True).stdout)
+            status = op.get("Operation",{}).get("Status","")
+            if status in ("SUCCESS","FAIL"):
+                break
+            time.sleep(2)
 
 # Register
 inst_r = subprocess.run([

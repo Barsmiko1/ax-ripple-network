@@ -184,10 +184,18 @@ Resources:
                 --service-id "$SVC_ID" --region ${AWS::Region} \
                 --query 'Instances[*].Id' --output text 2>/dev/null)
               for old_id in $OLD_INSTS; do
-                aws servicediscovery deregister-instance \
+                OP_ID=$(aws servicediscovery deregister-instance \
                   --service-id "$SVC_ID" --instance-id "$old_id" \
-                  --region ${AWS::Region} 2>/dev/null
-                echo "Deregistered stale Cloud Map instance: $old_id"
+                  --region ${AWS::Region} --query 'OperationId' --output text 2>/dev/null)
+                echo "Deregistered stale Cloud Map instance: $old_id (op=$OP_ID)"
+                # Wait for deregister to complete before registering
+                for _w in $(seq 1 30); do
+                  OP_STATUS=$(aws servicediscovery get-operation \
+                    --operation-id "$OP_ID" --region ${AWS::Region} \
+                    --query 'Operation.Status' --output text 2>/dev/null)
+                  if [ "$OP_STATUS" = "SUCCESS" ] || [ "$OP_STATUS" = "FAIL" ]; then break; fi
+                  sleep 2
+                done
               done
               aws servicediscovery register-instance \
                 --service-id "$SVC_ID" \
