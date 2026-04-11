@@ -23,8 +23,11 @@ Parameters:
   ApiNodeDiscoveryEndpoint:
     Type: String
   AmiId:
-    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
-    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64
+    Type: String
+    Description: >-
+      Amazon Linux 2023 AMI ID — resolved by Terraform via SSM parameter
+      /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64
+      so CloudFormation does not need ssm:GetParameters.
 
 Conditions:
   HasKeyPair: !Not [!Equals [!Ref KeyPairName, ""]]
