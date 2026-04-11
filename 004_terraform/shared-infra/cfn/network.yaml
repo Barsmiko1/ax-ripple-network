@@ -189,6 +189,8 @@ Resources:
   # ===========================================================================
   RippledPeerSG:
     Type: AWS::EC2::SecurityGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       GroupDescription: Rippled peer-to-peer traffic (port 51235)
       VpcId: !Ref VPC
@@ -207,8 +209,10 @@ Resources:
 
   RippledAPISG:
     Type: AWS::EC2::SecurityGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
-      GroupDescription: Rippled API traffic (HTTP 5005, WS 6006)
+      GroupDescription: Rippled API traffic (HTTP 51234, WS 6006)
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -235,6 +239,8 @@ Resources:
 
   HAProxySG:
     Type: AWS::EC2::SecurityGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       GroupDescription: HAProxy public-facing traffic
       VpcId: !Ref VPC
@@ -273,6 +279,8 @@ Resources:
 
   PrometheusSG:
     Type: AWS::EC2::SecurityGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       GroupDescription: Prometheus and Grafana observability traffic
       VpcId: !Ref VPC
@@ -296,6 +304,8 @@ Resources:
 
   AtlantisSG:
     Type: AWS::EC2::SecurityGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       GroupDescription: Atlantis server traffic
       VpcId: !Ref VPC
@@ -360,5 +370,4 @@ Outputs:
     Value: !Ref AtlantisSG
     Export:
       Name: !Sub "${AWS::StackName}-AtlantisSGId"
-
 
