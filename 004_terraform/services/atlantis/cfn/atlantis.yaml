@@ -173,6 +173,9 @@ Resources:
         # This ensures the same public IP is used regardless of task restarts.
         # -----------------------------------------------------------------------
         - Name: eip-associate
+          # amazon/aws-cli sets ENTRYPOINT ["aws"], so we must override it to /bin/sh.
+          # Without the EntryPoint override, Command args are passed to `aws` directly
+          # which interprets "/bin/sh" as an aws subcommand → ParamValidation error.
           Image: amazon/aws-cli:latest
           Essential: false
           LogConfiguration:
@@ -186,19 +189,23 @@ Resources:
               Value: !Ref AtlantisEIPAllocationId
             - Name: AWS_DEFAULT_REGION
               Value: !Ref "AWS::Region"
-          Command:
+          # Override the default ENTRYPOINT ["aws"] so we can run a shell script
+          EntryPoint:
             - "/bin/sh"
             - "-c"
+          Command:
             - |
-              TOKEN=$(curl -sf -X PUT "http://169.254.170.2/v4/$(curl -sf http://169.254.170.2/v4)" -H "X-aws-ec2-metadata-token-ttl-seconds: 60" 2>/dev/null || true)
+              set -e
+              echo "[eip-associate] Fetching ENI ID from EC2 instance metadata..."
               MAC=$(curl -sf http://169.254.169.254/latest/meta-data/network/interfaces/macs/ | head -1 | tr -d '/')
               ENI_ID=$(curl -sf "http://169.254.169.254/latest/meta-data/network/interfaces/macs/${MAC}/interface-id")
-              echo "[eip-associate] Associating EIP ${EIP_ALLOCATION_ID} to ENI ${ENI_ID}"
+              echo "[eip-associate] ENI: ${ENI_ID}"
+              echo "[eip-associate] Associating EIP ${EIP_ALLOCATION_ID} to ENI ${ENI_ID}..."
               aws ec2 associate-address \
                 --allocation-id "${EIP_ALLOCATION_ID}" \
                 --network-interface-id "${ENI_ID}" \
                 --allow-reassociation
-              echo "[eip-associate] Done"
+              echo "[eip-associate] Done — EIP associated successfully"
 
         # -----------------------------------------------------------------------
         # Atlantis server
