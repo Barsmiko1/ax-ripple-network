@@ -198,7 +198,7 @@ aws iam create-role \
 # Attach permissions the role needs for the full deployment scope.
 # Option A: Use AWS managed policies (broader, simpler)
 for policy in \
-  arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser \
+  arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryFullAccess \
   arn:aws:iam::aws:policy/AmazonECS_FullAccess \
   arn:aws:iam::aws:policy/AWSCloudFormationFullAccess \
   arn:aws:iam::aws:policy/AmazonEC2FullAccess \
@@ -241,7 +241,7 @@ aws iam put-role-policy \
     ]
   }'
 
-# IAM pass-role (required for ECS task execution role + CloudFormation)
+# IAM pass-role + role management (CloudFormation creates IAM roles for ECS tasks + HAProxy)
 aws iam put-role-policy \
   --role-name github-actions-role \
   --policy-name iam-pass-role \
@@ -253,18 +253,27 @@ aws iam put-role-policy \
         "iam:PassRole",
         "iam:GetRole",
         "iam:CreateRole",
-        "iam:AttachRolePolicy",
-        "iam:PutRolePolicy",
-        "iam:DeleteRolePolicy",
-        "iam:DetachRolePolicy",
         "iam:DeleteRole",
         "iam:TagRole",
+        "iam:UntagRole",
+        "iam:AttachRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:PutRolePolicy",
+        "iam:GetRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:ListRolePolicies",
+        "iam:ListAttachedRolePolicies",
         "iam:CreateInstanceProfile",
+        "iam:DeleteInstanceProfile",
+        "iam:GetInstanceProfile",
         "iam:AddRoleToInstanceProfile",
         "iam:RemoveRoleFromInstanceProfile",
-        "iam:DeleteInstanceProfile"
+        "iam:ListInstanceProfilesForRole"
       ],
-      "Resource": "arn:aws:iam::*:role/ax-ripple-*"
+      "Resource": [
+        "arn:aws:iam::443370674281:role/ax-ripple-*",
+        "arn:aws:iam::443370674281:instance-profile/ax-ripple-*"
+      ]
     }]
   }'
 
@@ -276,7 +285,15 @@ aws secretsmanager create-secret --name atlantis/github-token \
 aws secretsmanager create-secret --name atlantis/webhook-secret \
   --secret-string "$(openssl rand -hex 32)"
 
-# 1d. Bootstrap Terraform state backend (S3 + DynamoDB)
+# 1d. Create validator seed secret for rippled private network
+#     For a real deployment, generate keys with: rippled wallet_propose
+#     The seed (master_seed) goes here; the public key goes into ValidatorPublicKeys tfvar.
+aws secretsmanager create-secret \
+  --name "ax-ripple-dev/validator-seed" \
+  --description "Rippled validator seed for AX Ripple dev private network" \
+  --secret-string "snYOUR_VALIDATOR_MASTER_SEED_HERE"
+
+# 1e. Bootstrap Terraform state backend (S3 + DynamoDB)
 chmod +x 003_scripts/bootstrap-backend.sh
 ./003_scripts/bootstrap-backend.sh
 ```

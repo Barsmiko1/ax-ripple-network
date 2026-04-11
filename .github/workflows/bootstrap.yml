@@ -141,6 +141,58 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
+      # -----------------------------------------------------------------------
+      # Build & push Docker images BEFORE Terraform apply
+      # ECS tasks need images to exist in ECR when services are created.
+      # On first bootstrap, ECR repos may not exist yet — create them first.
+      # -----------------------------------------------------------------------
+      - name: Ensure ECR repositories exist
+        run: |
+          for repo in ax-ripple-${{ inputs.environment }}/validator ax-ripple-${{ inputs.environment }}/api-node; do
+            aws ecr describe-repositories --repository-names "$repo" 2>/dev/null || \
+            aws ecr create-repository --repository-name "$repo" --image-tag-mutability MUTABLE --image-scanning-configuration scanOnPush=true
+          done
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build & push Validator image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: 001_app/docker/Dockerfile.validator
+          push: true
+          tags: |
+            ${{ steps.ecr-login.outputs.registry }}/ax-ripple-${{ inputs.environment }}/validator:latest
+            ${{ steps.ecr-login.outputs.registry }}/ax-ripple-${{ inputs.environment }}/validator:r-1.0.0
+          cache-from: type=gha,scope=validator
+          cache-to: type=gha,mode=max,scope=validator
+
+      - name: Build & push API Node image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: 001_app/docker/Dockerfile.api-node
+          push: true
+          tags: |
+            ${{ steps.ecr-login.outputs.registry }}/ax-ripple-${{ inputs.environment }}/api-node:latest
+            ${{ steps.ecr-login.outputs.registry }}/ax-ripple-${{ inputs.environment }}/api-node:r-1.0.0
+          cache-from: type=gha,scope=api-node
+          cache-to: type=gha,mode=max,scope=api-node
+
+      - name: Confirm images in ECR
+        run: |
+          echo "✅ ECR images pushed:"
+          aws ecr list-images --repository-name ax-ripple-${{ inputs.environment }}/validator --query 'imageIds[*].imageTag' --output table
+          aws ecr list-images --repository-name ax-ripple-${{ inputs.environment }}/api-node --query 'imageIds[*].imageTag' --output table
+
+      # -----------------------------------------------------------------------
+      # Terraform — deploy ECS services, HAProxy, observability
+      # -----------------------------------------------------------------------
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}

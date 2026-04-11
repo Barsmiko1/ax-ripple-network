@@ -1,4 +1,4 @@
-hange the folder naming convention # Terraform
+# Terraform
 
 .terraform/
 *.tfstate
