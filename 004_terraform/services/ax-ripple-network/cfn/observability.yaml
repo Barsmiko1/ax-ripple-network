@@ -31,7 +31,9 @@ Resources:
       Encrypted: true
       PerformanceMode: generalPurpose
       ThroughputMode: bursting
-      # FileSystemTags omitted — github-actions-role lacks elasticfilesystem:TagResource
+      FileSystemTags:
+        - Key: Name
+          Value: !Sub "ax-ripple-${Environment}-observability-efs"
 
   EFSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
