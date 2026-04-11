@@ -59,7 +59,7 @@ Resources:
       RepositoryName: !Sub "ax-ripple-${Environment}/validator"
       ImageScanningConfiguration:
         ScanOnPush: true
-      ImageTagMutability: IMMUTABLE
+      ImageTagMutability: MUTABLE
       LifecyclePolicy:
         LifecyclePolicyText: |
           {
@@ -80,7 +80,7 @@ Resources:
       RepositoryName: !Sub "ax-ripple-${Environment}/api-node"
       ImageScanningConfiguration:
         ScanOnPush: true
-      ImageTagMutability: IMMUTABLE
+      ImageTagMutability: MUTABLE
       LifecyclePolicy:
         LifecyclePolicyText: |
           {
@@ -169,12 +169,15 @@ Resources:
                 Resource: !Sub "arn:aws:s3:::ax-ripple-${Environment}-configs/*"
 
   # ===========================================================================
-  # Task Definition — Validator
+  # Task Definitions — Validators (one per validator, each with unique seed)
+  # Each validator needs a unique validation_seed for consensus to work.
+  # ECS Fargate doesn't support per-task secret injection within a service,
+  # so we create 3 separate task definitions + services.
   # ===========================================================================
-  ValidatorTaskDefinition:
+  Validator1TaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
-      Family: !Sub "ax-ripple-${Environment}-validator"
+      Family: !Sub "ax-ripple-${Environment}-validator-1"
       RequiresCompatibilities: [FARGATE]
       NetworkMode: awsvpc
       Cpu: !Ref TaskCpu
@@ -193,7 +196,7 @@ Resources:
             Options:
               awslogs-group: !Ref ValidatorLogGroup
               awslogs-region: !Ref "AWS::Region"
-              awslogs-stream-prefix: validator
+              awslogs-stream-prefix: validator-1
           HealthCheck:
             Command: ["CMD-SHELL", "curl -sf http://localhost:5005/ || exit 1"]
             Interval: 30
@@ -214,6 +217,94 @@ Resources:
           Secrets:
             - Name: VALIDATION_SEED
               ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ax-ripple-${Environment}/validator-seed"
+
+  Validator2TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "ax-ripple-${Environment}-validator-2"
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      ExecutionRoleArn: !Ref ECSTaskExecutionRoleArn
+      TaskRoleArn: !GetAtt RippledTaskRole.Arn
+      ContainerDefinitions:
+        - Name: rippled-validator
+          Image: !Ref ValidatorImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 51235
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref ValidatorLogGroup
+              awslogs-region: !Ref "AWS::Region"
+              awslogs-stream-prefix: validator-2
+          HealthCheck:
+            Command: ["CMD-SHELL", "curl -sf http://localhost:5005/ || exit 1"]
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 120
+          Environment:
+            - Name: RIPPLED_ROLE
+              Value: validator
+            - Name: ENVIRONMENT
+              Value: !Ref Environment
+            - Name: NETWORK_ID
+              Value: "10000"
+            - Name: VALIDATOR_PUBLIC_KEYS
+              Value: !Ref ValidatorPublicKeys
+            - Name: PEER_IPS
+              Value: !Sub "ripple-validator.${Environment}.local 51235,ripple-api.${Environment}.local 51235"
+          Secrets:
+            - Name: VALIDATION_SEED
+              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ax-ripple-${Environment}/validator-seed-2"
+
+  Validator3TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "ax-ripple-${Environment}-validator-3"
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      ExecutionRoleArn: !Ref ECSTaskExecutionRoleArn
+      TaskRoleArn: !GetAtt RippledTaskRole.Arn
+      ContainerDefinitions:
+        - Name: rippled-validator
+          Image: !Ref ValidatorImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 51235
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref ValidatorLogGroup
+              awslogs-region: !Ref "AWS::Region"
+              awslogs-stream-prefix: validator-3
+          HealthCheck:
+            Command: ["CMD-SHELL", "curl -sf http://localhost:5005/ || exit 1"]
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 120
+          Environment:
+            - Name: RIPPLED_ROLE
+              Value: validator
+            - Name: ENVIRONMENT
+              Value: !Ref Environment
+            - Name: NETWORK_ID
+              Value: "10000"
+            - Name: VALIDATOR_PUBLIC_KEYS
+              Value: !Ref ValidatorPublicKeys
+            - Name: PEER_IPS
+              Value: !Sub "ripple-validator.${Environment}.local 51235,ripple-api.${Environment}.local 51235"
+          Secrets:
+            - Name: VALIDATION_SEED
+              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ax-ripple-${Environment}/validator-seed-3"
 
   # ===========================================================================
   # Task Definition — API Node
@@ -264,15 +355,15 @@ Resources:
               Value: !Sub "ripple-validator.${Environment}.local 51235,ripple-api.${Environment}.local 51235"
 
   # ===========================================================================
-  # ECS Service — Validators
+  # ECS Services — Validators (one service per validator for unique seeds)
   # ===========================================================================
-  ValidatorService:
+  Validator1Service:
     Type: AWS::ECS::Service
     Properties:
-      ServiceName: !Sub "ax-ripple-${Environment}-validators"
+      ServiceName: !Sub "ax-ripple-${Environment}-validator-1"
       Cluster: !Ref ECSClusterArn
-      TaskDefinition: !Ref ValidatorTaskDefinition
-      DesiredCount: !Ref ValidatorDesiredCount
+      TaskDefinition: !Ref Validator1TaskDefinition
+      DesiredCount: 1
       LaunchType: FARGATE
       NetworkConfiguration:
         AwsvpcConfiguration:
@@ -283,8 +374,50 @@ Resources:
       ServiceRegistries:
         - RegistryArn: !GetAtt ValidatorServiceDiscovery.Arn
       DeploymentConfiguration:
-        MinimumHealthyPercent: 50
-        MaximumPercent: 200
+        MinimumHealthyPercent: 0
+        MaximumPercent: 100
+      EnableExecuteCommand: true
+
+  Validator2Service:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub "ax-ripple-${Environment}-validator-2"
+      Cluster: !Ref ECSClusterArn
+      TaskDefinition: !Ref Validator2TaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets: !Ref PrivateSubnetIds
+          SecurityGroups:
+            - !Ref RippledPeerSGId
+      ServiceRegistries:
+        - RegistryArn: !GetAtt ValidatorServiceDiscovery.Arn
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 0
+        MaximumPercent: 100
+      EnableExecuteCommand: true
+
+  Validator3Service:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub "ax-ripple-${Environment}-validator-3"
+      Cluster: !Ref ECSClusterArn
+      TaskDefinition: !Ref Validator3TaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets: !Ref PrivateSubnetIds
+          SecurityGroups:
+            - !Ref RippledPeerSGId
+      ServiceRegistries:
+        - RegistryArn: !GetAtt ValidatorServiceDiscovery.Arn
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 0
+        MaximumPercent: 100
       EnableExecuteCommand: true
 
   # ===========================================================================

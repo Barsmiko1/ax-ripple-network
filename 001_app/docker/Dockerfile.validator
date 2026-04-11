@@ -1,18 +1,19 @@
 # =============================================================================
 # Dockerfile — Rippled Validator Node (Multi-Stage)
 # =============================================================================
-# Multi-stage build for minimal production image.
-#   Stage 1 (builder): Install rippled from apt with all build deps
-#   Stage 2 (runtime): Copy only the rippled binary + runtime libs
+# Lightweight production image for rippled validator nodes.
+#   Stage 1 (builder): Add Ripple apt repo GPG key
+#   Stage 2 (runtime): Install rippled + minimal runtime deps
 #
 # Build:
 #   docker build -t ax-ripple-validator -f Dockerfile.validator .
+#   # On Apple Silicon (ARM) machines, add: --platform linux/amd64
 #
 # The build context should be the repo root so 002_configs/ is accessible.
 # =============================================================================
 
 # ===========================================================================
-# Stage 1 — Builder: Install rippled + capture binary & shared libraries
+# Stage 1 — Builder: Fetch GPG key for Ripple apt repository
 # ===========================================================================
 FROM ubuntu:22.04 AS builder
 
@@ -24,24 +25,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
-# Add Ripple apt repository and install rippled
+# Download and dearmor the Ripple GPG key
 RUN mkdir -p /usr/local/share/keyrings && \
     wget -q -O - "https://repos.ripple.com/repos/api/gpg/key/public" | \
-    gpg --dearmor > /usr/local/share/keyrings/ripple.gpg && \
-    echo "deb [signed-by=/usr/local/share/keyrings/ripple.gpg] https://repos.ripple.com/repos/rippled-deb focal stable" \
-    > /etc/apt/sources.list.d/ripple.list && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends rippled && \
-    rm -rf /var/lib/apt/lists/*
-
-# Collect rippled's shared library dependencies for the runtime stage
-RUN mkdir -p /runtime/lib && \
-    ldd /opt/ripple/bin/rippled | grep "=> /" | awk '{print $3}' | \
-    xargs -I{} cp --parents {} /runtime/ && \
-    cp /opt/ripple/bin/rippled /runtime/
+    gpg --dearmor > /usr/local/share/keyrings/ripple.gpg
 
 # ===========================================================================
-# Stage 2 — Runtime: Slim Debian with only rippled + curl for healthcheck
+# Stage 2 — Runtime: Slim image with rippled installed from apt
 # ===========================================================================
 FROM debian:bookworm-slim AS runtime
 
@@ -51,21 +41,27 @@ LABEL role="validator"
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install only curl + bash (required for HEALTHCHECK and entrypoint)
+# Install ca-certificates first (required for HTTPS apt repos)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy GPG key from builder
+COPY --from=builder /usr/local/share/keyrings/ripple.gpg /usr/local/share/keyrings/ripple.gpg
+
+# Add Ripple apt repository and install rippled + minimal runtime deps
+RUN echo "deb [signed-by=/usr/local/share/keyrings/ripple.gpg] https://repos.ripple.com/repos/rippled-deb focal stable" \
+    > /etc/apt/sources.list.d/ripple.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+    rippled \
     curl \
     bash \
     && rm -rf /var/lib/apt/lists/* \
-    && apt-get purge -y --auto-remove
+    && apt-get clean
 
-# Copy rippled binary + shared libraries from builder
-COPY --from=builder /runtime/opt/ripple/bin/rippled /usr/local/bin/rippled
-COPY --from=builder /runtime/lib/ /lib/
-COPY --from=builder /runtime/usr/lib/ /usr/lib/
-
-# Create non-root user for security
-RUN groupadd -r rippled && useradd -r -g rippled -m rippled
+# Create non-root user for security (rippled package may already create this)
+RUN (groupadd -r rippled 2>/dev/null || true) && (useradd -r -g rippled -m rippled 2>/dev/null || true)
 
 # Create data and log directories
 RUN mkdir -p /var/lib/rippled/db /var/log/rippled /etc/opt/ripple && \
