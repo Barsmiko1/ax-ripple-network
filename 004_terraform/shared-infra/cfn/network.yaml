@@ -297,6 +297,24 @@ Resources:
         - Key: Name
           Value: !Sub "ax-ripple-${Environment}-atlantis-sg"
 
+  # ===========================================================================
+  # Elastic IP — Atlantis
+  # Allocated here (shared-infra) so the public IP is stable across Atlantis
+  # task restarts. The Atlantis container associates this EIP to its ENI on
+  # startup via the AWS CLI (requires the AtlantisTaskRole to have ec2:AssociateAddress).
+  # The same IP is registered as the GitHub webhook URL.
+  # ===========================================================================
+  AtlantisEIP:
+    Type: AWS::EC2::EIP
+    DependsOn: IGWAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "ax-ripple-${Environment}-atlantis-eip"
+        - Key: Environment
+          Value: !Ref Environment
+
 Outputs:
   VpcId:
     Description: VPC ID
@@ -345,4 +363,16 @@ Outputs:
     Value: !Ref AtlantisSG
     Export:
       Name: !Sub "${AWS::StackName}-AtlantisSGId"
+
+  AtlantisEIPAllocationId:
+    Description: Allocation ID of the Atlantis Elastic IP
+    Value: !GetAtt AtlantisEIP.AllocationId
+    Export:
+      Name: !Sub "${AWS::StackName}-AtlantisEIPAllocationId"
+
+  AtlantisPublicIp:
+    Description: Fixed public IP address for Atlantis (stable across task restarts)
+    Value: !GetAtt AtlantisEIP.PublicIp
+    Export:
+      Name: !Sub "${AWS::StackName}-AtlantisPublicIp"
 
