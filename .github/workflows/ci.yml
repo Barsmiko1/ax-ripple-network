@@ -69,10 +69,6 @@ jobs:
 
   # ===========================================================================
   # Docker Build & Push to ECR — runs on pull_request
-  #
-  # Builds images BEFORE Atlantis plans, so terraform plan references
-  # an image that actually exists in ECR.
-  #
   # Tag format: r-1.0.X (same tag used for Docker image, Git tag, and release)
   # ===========================================================================
   docker-build-push:
@@ -360,3 +356,5 @@ jobs:
           echo "| **Tag** | \`${{ steps.version.outputs.tag }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Commit** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Images** | Promoted to \`:latest\` |" >> $GITHUB_STEP_SUMMARY
+
+

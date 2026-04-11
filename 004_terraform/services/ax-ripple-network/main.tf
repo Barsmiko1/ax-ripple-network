@@ -56,7 +56,8 @@ resource "aws_cloudformation_stack" "ecs_services" {
     ApiNodeDesiredCount         = tostring(var.api_node_desired_count)
     TaskCpu                     = var.task_cpu
     TaskMemory                  = var.task_memory
-    ValidatorPublicKeys         = var.validator_public_keys
+    # ValidatorPublicKeys is sourced from Secrets Manager (ax-ripple-<env>/validator-public-keys)
+    # and injected directly into containers via ECS task definition Secrets — not passed here.
   }
 
   capabilities = ["CAPABILITY_NAMED_IAM"]
