@@ -130,6 +130,8 @@ jobs:
     needs: [shared-infra, atlantis]
     if: inputs.deploy_ripple_network
     runs-on: ubuntu-latest
+    outputs:
+      haproxy_public_ip: ${{ steps.tf-outputs.outputs.haproxy_public_ip }}
     defaults:
       run:
         working-directory: 004_terraform/services/ax-ripple-network
@@ -206,11 +208,92 @@ jobs:
       - name: Terraform Apply
         run: terraform apply -auto-approve -input=false tfplan
 
+      - name: Capture Terraform outputs
+        id: tf-outputs
+        run: |
+          HAPROXY_IP=$(terraform output -raw haproxy_public_ip)
+          echo "haproxy_public_ip=${HAPROXY_IP}" >> "$GITHUB_OUTPUT"
+          echo "HAProxy public IP: ${HAPROXY_IP}"
+
       - name: Output Summary
         run: |
           echo "## ✅ AX Ripple Network Deployed" >> $GITHUB_STEP_SUMMARY
           echo "| Output | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| HAProxy HTTP | $(terraform output -raw haproxy_http_endpoint) |" >> $GITHUB_STEP_SUMMARY
-          echo "| HAProxy WS | $(terraform output -raw haproxy_ws_endpoint) |" >> $GITHUB_STEP_SUMMARY
+          echo "| HAProxy WS   | $(terraform output -raw haproxy_ws_endpoint) |" >> $GITHUB_STEP_SUMMARY
+          echo "| HAProxy IP   | $(terraform output -raw haproxy_public_ip) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Grafana      | http://$(terraform output -raw haproxy_public_ip):3000 |" >> $GITHUB_STEP_SUMMARY
+          echo "| Prometheus   | http://$(terraform output -raw haproxy_public_ip):9090 |" >> $GITHUB_STEP_SUMMARY
+
+  # ===========================================================================
+  # Step 4 — Post-Deploy Configuration
+  # Runs after ripple-network apply. Idempotent — safe to re-run anytime.
+  #   1. update-task-definitions.sh  — wires full Secrets Manager ARNs into ECS tasks
+  #   2. Waits for Prometheus + Grafana ECS services to be stable
+  #   3. provision-grafana-dashboard.sh — upserts Prometheus datasource + dashboard
+  #
+  # HAProxy public IP is read from Terraform output (not hardcoded) so it
+  # survives re-deploys where the EIP may be re-allocated.
+  # ===========================================================================
+  post-deploy:
+    name: "4. Post-Deploy Configuration"
+    needs: ripple-network
+    if: inputs.deploy_ripple_network
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      ENVIRONMENT: ${{ inputs.environment }}
+      CLUSTER: ax-ripple-${{ inputs.environment }}
+      HAPROXY_IP: ${{ needs.ripple-network.outputs.haproxy_public_ip }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Make scripts executable
+        run: chmod +x 003_scripts/*.sh
+
+      - name: Update ECS task definitions (resolve full secret ARNs)
+        run: ./003_scripts/update-task-definitions.sh ${{ env.ENVIRONMENT }}
+
+      - name: Wait for Prometheus service to be stable
+        run: |
+          echo "Waiting for ax-ripple-${{ env.ENVIRONMENT }}-prometheus to stabilise..."
+          aws ecs wait services-stable \
+            --cluster ${{ env.CLUSTER }} \
+            --services ax-ripple-${{ env.ENVIRONMENT }}-prometheus \
+            --region ${{ env.AWS_REGION }} || true
+          echo "Prometheus service stable."
+
+      - name: Wait for Grafana service to be stable
+        run: |
+          echo "Waiting for ax-ripple-${{ env.ENVIRONMENT }}-grafana to stabilise..."
+          aws ecs wait services-stable \
+            --cluster ${{ env.CLUSTER }} \
+            --services ax-ripple-${{ env.ENVIRONMENT }}-grafana \
+            --region ${{ env.AWS_REGION }} || true
+          echo "Grafana service stable."
+
+      - name: Provision Grafana datasource and dashboard
+        env:
+          GRAFANA_URL: "http://${{ env.HAPROXY_IP }}:3000"
+          GRAFANA_USER: admin
+          GRAFANA_PASSWORD: admin
+          PROMETHEUS_INTERNAL: "http://prometheus.${{ env.ENVIRONMENT }}.local:9090"
+          HAPROXY_IP: ${{ env.HAPROXY_IP }}
+        run: ./003_scripts/provision-grafana-dashboard.sh
+
+      - name: Summary
+        run: |
+          echo "## ✅ Post-Deploy Configuration Applied" >> $GITHUB_STEP_SUMMARY
+          echo "| Step | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Task Definitions Updated | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Grafana Dashboard Provisioned | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Grafana URL** | http://${{ env.HAPROXY_IP }}:3000/d/ax-ripple-network |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Prometheus URL** | http://${{ env.HAPROXY_IP }}:9090 |" >> $GITHUB_STEP_SUMMARY
 

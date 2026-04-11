@@ -28,6 +28,9 @@ Parameters:
       Amazon Linux 2023 AMI ID — resolved by Terraform via SSM parameter
       /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64
       so CloudFormation does not need ssm:GetParameters.
+  ServiceDiscoveryNamespaceId:
+    Type: String
+    Description: Cloud Map namespace ID (from shared-infra) used for self-registration
 
 Conditions:
   HasKeyPair: !Not [!Equals [!Ref KeyPairName, ""]]
@@ -62,6 +65,19 @@ Resources:
               - Effect: Allow
                 Action:
                   - servicediscovery:DiscoverInstances
+                  # Self-register into Cloud Map on every boot so Prometheus
+                  # can resolve haproxy.<env>.local without manual steps
+                  - servicediscovery:RegisterInstance
+                  - servicediscovery:DeregisterInstance
+                  - servicediscovery:ListServices
+                  - servicediscovery:ListNamespaces
+                  - servicediscovery:GetOperation
+                Resource: "*"
+              # Required to re-associate the EIP on instance launch
+              - Effect: Allow
+                Action:
+                  - ec2:AssociateAddress
+                  - ec2:DescribeAddresses
                 Resource: "*"
 
   HAProxyInstanceProfile:
@@ -99,7 +115,6 @@ Resources:
 
             # ----------------------------------------------------------------
             # cfn-bootstrap is pre-installed on this AMI at /opt/aws/bin/
-            # No need to pip-install it — just use it directly.
             # Set up the EXIT trap before set -e so CloudFormation is always
             # signalled on both success and failure.
             # ----------------------------------------------------------------
@@ -114,18 +129,76 @@ Resources:
             set -euo pipefail
 
             # ----------------------------------------------------------------
-            # AL2023 ships curl-minimal — do NOT install full curl (conflicts).
-            # Skip dnf update to avoid slow/unnecessary package churn.
+            # AL2023: curl-minimal pre-installed, skip dnf update
             # ----------------------------------------------------------------
             dnf install -y haproxy jq
-            # curl-minimal is already present on AL2023; no need to install curl
             systemctl enable haproxy
+
+            # ----------------------------------------------------------------
+            # Re-associate the Elastic IP to this instance on every launch
+            # ----------------------------------------------------------------
+            INSTANCE_ID=$(curl -sf http://169.254.169.254/latest/meta-data/instance-id)
+            EIP_ALLOC=$(aws ec2 describe-addresses --region ${AWS::Region} \
+              --query "Addresses[?Tags[?Key=='aws:cloudformation:stack-name'&&Value=='${AWS::StackName}']].AllocationId" \
+              --output text 2>/dev/null || echo "")
+            if [ -n "$EIP_ALLOC" ]; then
+              aws ec2 associate-address --region ${AWS::Region} \
+                --instance-id "$INSTANCE_ID" \
+                --allocation-id "$EIP_ALLOC" \
+                --allow-reassociation
+              echo "EIP $EIP_ALLOC associated with $INSTANCE_ID"
+            fi
+
+            # ----------------------------------------------------------------
+            # Self-register this HAProxy instance in Cloud Map so Prometheus
+            # can resolve haproxy.<env>.local:8404 via DNS without manual steps.
+            # Idempotent: deregisters any stale instance first, then registers.
+            # ----------------------------------------------------------------
+            PRIVATE_IP=$(curl -sf http://169.254.169.254/latest/meta-data/local-ipv4)
+            NS_ID="${ServiceDiscoveryNamespaceId}"
+            SVC_ID=$(aws servicediscovery list-services --region ${AWS::Region} \
+              --filters "Name=NAMESPACE_ID,Values=$NS_ID,Condition=EQ" \
+              --query "Services[?Name=='haproxy'].Id" --output text 2>/dev/null || echo "")
+
+            if [ -z "$SVC_ID" ]; then
+              # Create the Cloud Map service for haproxy if it doesn't exist yet
+              SVC_ID=$(aws servicediscovery create-service \
+                --name haproxy \
+                --namespace-id "$NS_ID" \
+                --dns-config 'RoutingPolicy=MULTIVALUE,DnsRecords=[{Type=A,TTL=10}]' \
+                --health-check-custom-config 'FailureThreshold=1' \
+                --region ${AWS::Region} \
+                --query 'Service.Id' --output text 2>/dev/null || echo "")
+              echo "Created Cloud Map service haproxy: $SVC_ID"
+            fi
+
+            if [ -n "$SVC_ID" ]; then
+              # Deregister any stale instance (old IP after ASG replacement)
+              OLD_INST=$(aws servicediscovery list-instances \
+                --service-id "$SVC_ID" --region ${AWS::Region} \
+                --query 'Instances[*].Id' --output text 2>/dev/null || echo "")
+              for old_id in $OLD_INST; do
+                aws servicediscovery deregister-instance \
+                  --service-id "$SVC_ID" --instance-id "$old_id" \
+                  --region ${AWS::Region} 2>/dev/null || true
+                echo "Deregistered stale Cloud Map instance: $old_id"
+              done
+              # Register this instance
+              aws servicediscovery register-instance \
+                --service-id "$SVC_ID" \
+                --instance-id "$INSTANCE_ID" \
+                --attributes "AWS_INSTANCE_IPV4=$PRIVATE_IP,AWS_INSTANCE_PORT=8404" \
+                --region ${AWS::Region}
+              echo "Registered haproxy in Cloud Map: $PRIVATE_IP:8404 (svc=$SVC_ID)"
+            fi
 
             cat > /etc/haproxy/haproxy.cfg << 'HAPROXY_CFG'
             global
                 log stdout format raw local0 info
                 maxconn 4096
                 daemon
+                stats socket /run/haproxy/admin.sock mode 660 level admin
+                stats timeout 30s
 
             defaults
                 log     global
@@ -142,9 +215,12 @@ Resources:
 
             frontend stats_front
                 bind *:8404
+                http-request use-service prometheus-exporter if { path /metrics }
                 stats enable
                 stats uri /stats
                 stats refresh 10s
+                stats show-legends
+                stats show-node
                 stats admin if TRUE
 
             frontend http_front
@@ -155,20 +231,39 @@ Resources:
                 bind *:6006
                 default_backend rippled_ws
 
+            frontend grafana_front
+                bind *:3000
+                default_backend grafana_backend
+
+            frontend prometheus_front
+                bind *:9090
+                default_backend prometheus_backend
+
             backend rippled_http
                 balance roundrobin
-                option httpchk GET /
-                server-template api- 1-10 ${ApiNodeDiscoveryEndpoint}:5005 check resolvers dns init-addr none inter 5s fall 3 rise 2
+                option httpchk
+                http-check send meth POST uri / ver HTTP/1.1 hdr Content-Type application/json hdr Content-Length 41 body "{\"method\":\"server_info\",\"params\":[{}]}"
+                http-check expect status 200
+                server-template api- 1-10 ${ApiNodeDiscoveryEndpoint}:51234 check resolvers dns init-addr none inter 5s fall 3 rise 2
 
             backend rippled_ws
                 balance roundrobin
-                option httpchk GET /
+                option tcp-check
+                tcp-check connect port 6006
                 stick-table type ip size 100k expire 30m
                 stick on src
                 server-template api- 1-10 ${ApiNodeDiscoveryEndpoint}:6006 check resolvers dns init-addr none inter 5s fall 3 rise 2
 
+            backend grafana_backend
+                balance roundrobin
+                server-template grafana- 1-2 grafana.${Environment}.local:3000 check resolvers dns init-addr none inter 10s fall 3 rise 2
+
+            backend prometheus_backend
+                balance roundrobin
+                server-template prometheus- 1-2 prometheus.${Environment}.local:9090 check resolvers dns init-addr none inter 10s fall 3 rise 2
+
             resolvers dns
-                nameserver vpc 10.0.0.2:53
+                nameserver vpc 169.254.169.253:53
                 resolve_retries 3
                 timeout resolve 1s
                 timeout retry   1s

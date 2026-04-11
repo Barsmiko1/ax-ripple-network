@@ -115,6 +115,7 @@ resource "aws_cloudformation_stack" "haproxy" {
     KeyPairName              = var.haproxy_key_pair_name
     ApiNodeDiscoveryEndpoint = aws_cloudformation_stack.ecs_services.outputs["ApiNodeDiscoveryEndpoint"]
     AmiId                    = data.aws_ssm_parameter.al2023_ami.value
+    ServiceDiscoveryNamespaceId = local.shared.service_discovery_namespace_id
   }
 
   capabilities = ["CAPABILITY_NAMED_IAM"]
@@ -152,8 +153,9 @@ resource "aws_cloudformation_stack" "observability" {
     PrivateSubnetIds         = local.shared.private_subnet_ids
     PrometheusSGId           = local.shared.prometheus_sg_id
     ECSClusterArn            = local.shared.ecs_cluster_arn
-    ApiNodeDiscoveryEndpoint = aws_cloudformation_stack.ecs_services.outputs["ApiNodeDiscoveryEndpoint"]
-    HAProxyStatsEndpoint     = aws_cloudformation_stack.haproxy.outputs["HAProxyStatsEndpoint"]
+    ApiNodeDiscoveryEndpoint    = aws_cloudformation_stack.ecs_services.outputs["ApiNodeDiscoveryEndpoint"]
+    HAProxyStatsEndpoint        = aws_cloudformation_stack.haproxy.outputs["HAProxyStatsEndpoint"]
+    ServiceDiscoveryNamespaceId = local.shared.service_discovery_namespace_id
   }
 
   capabilities = ["CAPABILITY_NAMED_IAM"]

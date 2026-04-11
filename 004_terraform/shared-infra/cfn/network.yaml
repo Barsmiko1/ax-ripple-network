@@ -208,19 +208,24 @@ Resources:
   RippledAPISG:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Rippled API traffic (HTTP 5005, WS 6006)
+      GroupDescription: Rippled API traffic (HTTP 51234, WS 6006)
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: tcp
-          FromPort: 5005
-          ToPort: 5005
+          FromPort: 51234
+          ToPort: 51234
           CidrIp: !Ref VpcCidr
-          Description: Rippled JSON-RPC (internal via HAProxy)
+          Description: Rippled public JSON-RPC (HAProxy backend)
         - IpProtocol: tcp
           FromPort: 6006
           ToPort: 6006
           CidrIp: !Ref VpcCidr
-          Description: Rippled WebSocket (internal via HAProxy)
+          Description: Rippled WebSocket (HAProxy backend)
+        - IpProtocol: tcp
+          FromPort: 5005
+          ToPort: 5005
+          CidrIp: !Ref VpcCidr
+          Description: Rippled admin JSON-RPC (internal only)
       SecurityGroupEgress:
         - IpProtocol: "-1"
           CidrIp: "0.0.0.0/0"
@@ -249,6 +254,16 @@ Resources:
           ToPort: 8404
           CidrIp: "0.0.0.0/0"
           Description: HAProxy stats dashboard
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          CidrIp: "0.0.0.0/0"
+          Description: Grafana UI (proxied via HAProxy)
+        - IpProtocol: tcp
+          FromPort: 9090
+          ToPort: 9090
+          CidrIp: "0.0.0.0/0"
+          Description: Prometheus UI (proxied via HAProxy)
       SecurityGroupEgress:
         - IpProtocol: "-1"
           CidrIp: "0.0.0.0/0"
