@@ -34,9 +34,6 @@ data "terraform_remote_state" "shared" {
 locals {
   shared         = data.terraform_remote_state.shared.outputs
   repo_allowlist = "github.com/${var.github_org}/ax-ripple-network"
-  # Derive the Atlantis public URL from the Elastic IP allocated in shared-infra.
-  # This is stable across task restarts — no hardcoded IPs anywhere in the repo.
-  atlantis_base_url = "http://${local.shared.atlantis_public_ip}:4141"
 }
 
 # =============================================================================
@@ -49,7 +46,6 @@ resource "aws_cloudformation_stack" "atlantis" {
 
   parameters = {
     Environment                 = var.environment
-    PublicSubnetIds             = local.shared.public_subnet_ids
     PrivateSubnetIds            = local.shared.private_subnet_ids
     AtlantisSGId                = local.shared.atlantis_sg_id
     ECSClusterArn               = local.shared.ecs_cluster_arn
@@ -60,8 +56,6 @@ resource "aws_cloudformation_stack" "atlantis" {
     GitHubWebhookSecretArn      = data.aws_secretsmanager_secret.github_webhook.arn
     AtlantisRepoAllowlist       = local.repo_allowlist
     GitHubUser                  = var.github_user
-    AtlantisBaseUrl             = local.atlantis_base_url
-    AtlantisEIPAllocationId     = local.shared.atlantis_eip_allocation_id
     TaskCpu                     = var.atlantis_task_cpu
     TaskMemory                  = var.atlantis_task_memory
   }

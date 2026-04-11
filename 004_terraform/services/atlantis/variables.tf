@@ -59,5 +59,3 @@ variable "atlantis_task_memory" {
   default     = "1024"
   description = "Memory (MB) for Atlantis ECS task"
 }
-
-

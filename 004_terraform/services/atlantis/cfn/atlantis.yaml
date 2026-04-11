@@ -8,11 +8,6 @@ Parameters:
     Type: String
     Default: dev
     AllowedValues: [dev, staging, prod]
-  # Public subnets — Atlantis must be publicly reachable for GitHub webhooks
-  PublicSubnetIds:
-    Type: CommaDelimitedList
-    Description: Public subnet IDs for Atlantis (must be publicly routable for GitHub webhooks)
-  # Private subnets kept for service discovery registration only
   PrivateSubnetIds:
     Type: CommaDelimitedList
   AtlantisSGId:
@@ -41,20 +36,6 @@ Parameters:
   GitHubUser:
     Type: String
     Description: GitHub username or bot account for Atlantis to comment on PRs
-  # The public URL GitHub uses to deliver webhooks and where Atlantis posts PR comments.
-  # Must be externally reachable. Format: http://<public-ip-or-dns>:4141
-  AtlantisBaseUrl:
-    Type: String
-    Description: >-
-      Publicly reachable URL for Atlantis (used as ATLANTIS_ATLANTIS_URL).
-      Derived from the Elastic IP allocated in the shared-infra network stack.
-      Format: http://<eip-public-ip>:4141
-  # Allocation ID of the Elastic IP from the shared-infra network stack.
-  # The Atlantis container associates this EIP to its own ENI on startup,
-  # ensuring the same public IP is reused across task restarts.
-  AtlantisEIPAllocationId:
-    Type: String
-    Description: EIP Allocation ID from shared-infra (e.g. eipalloc-xxxxxxxxx)
   TaskCpu:
     Type: String
     Default: "512"
@@ -143,15 +124,6 @@ Resources:
                   - ssm:GetParameter*
                   - secretsmanager:GetSecretValue
                 Resource: "*"
-              # EIP self-association — allows the Atlantis task to attach the
-              # shared-infra Elastic IP to its own ENI on startup so the public
-              # IP is stable across task restarts.
-              - Effect: Allow
-                Action:
-                  - ec2:AssociateAddress
-                  - ec2:DescribeNetworkInterfaces
-                  - ec2:DescribeAddresses
-                Resource: "*"
 
   # ===========================================================================
   # ECS Task Definition
@@ -167,55 +139,9 @@ Resources:
       ExecutionRoleArn: !Ref ECSTaskExecutionRoleArn
       TaskRoleArn: !GetAtt AtlantisTaskRole.Arn
       ContainerDefinitions:
-        # -----------------------------------------------------------------------
-        # Init container — associates the shared-infra Elastic IP to this
-        # task's ENI before Atlantis starts. Runs once and exits (essential: false).
-        # This ensures the same public IP is used regardless of task restarts.
-        # -----------------------------------------------------------------------
-        - Name: eip-associate
-          # amazon/aws-cli sets ENTRYPOINT ["aws"], so we must override it to /bin/sh.
-          # Without the EntryPoint override, Command args are passed to `aws` directly
-          # which interprets "/bin/sh" as an aws subcommand → ParamValidation error.
-          Image: amazon/aws-cli:latest
-          Essential: false
-          LogConfiguration:
-            LogDriver: awslogs
-            Options:
-              awslogs-group: !Ref AtlantisLogGroup
-              awslogs-region: !Ref "AWS::Region"
-              awslogs-stream-prefix: eip-associate
-          Environment:
-            - Name: EIP_ALLOCATION_ID
-              Value: !Ref AtlantisEIPAllocationId
-            - Name: AWS_DEFAULT_REGION
-              Value: !Ref "AWS::Region"
-          # Override the default ENTRYPOINT ["aws"] so we can run a shell script
-          EntryPoint:
-            - "/bin/sh"
-            - "-c"
-          Command:
-            - |
-              set -e
-              echo "[eip-associate] Fetching ENI ID from EC2 instance metadata..."
-              MAC=$(curl -sf http://169.254.169.254/latest/meta-data/network/interfaces/macs/ | head -1 | tr -d '/')
-              ENI_ID=$(curl -sf "http://169.254.169.254/latest/meta-data/network/interfaces/macs/${MAC}/interface-id")
-              echo "[eip-associate] ENI: ${ENI_ID}"
-              echo "[eip-associate] Associating EIP ${EIP_ALLOCATION_ID} to ENI ${ENI_ID}..."
-              aws ec2 associate-address \
-                --allocation-id "${EIP_ALLOCATION_ID}" \
-                --network-interface-id "${ENI_ID}" \
-                --allow-reassociation
-              echo "[eip-associate] Done — EIP associated successfully"
-
-        # -----------------------------------------------------------------------
-        # Atlantis server
-        # -----------------------------------------------------------------------
         - Name: atlantis
           Image: !Ref AtlantisImage
           Essential: true
-          DependsOn:
-            - ContainerName: eip-associate
-              Condition: SUCCESS
           PortMappings:
             - ContainerPort: 4141
               Protocol: tcp
@@ -238,10 +164,8 @@ Resources:
               Value: !Ref GitHubUser
             - Name: ATLANTIS_REPO_ALLOWLIST
               Value: !Ref AtlantisRepoAllowlist
-            # ATLANTIS_ATLANTIS_URL must be the public URL GitHub sends webhooks to.
-            # Derived from the Elastic IP — stable across task restarts.
             - Name: ATLANTIS_ATLANTIS_URL
-              Value: !Ref AtlantisBaseUrl
+              Value: !Sub "http://atlantis.${Environment}.local:4141"
             - Name: ATLANTIS_REPO_CONFIG_JSON
               Value: '{"repos":[{"id":"/.*/","allowed_overrides":["workflow","apply_requirements"],"allow_custom_workflows":true}]}'
           Secrets:
@@ -252,9 +176,6 @@ Resources:
 
   # ===========================================================================
   # ECS Service
-  # Atlantis MUST run in a public subnet with a public IP so that GitHub can
-  # deliver webhook events. Private subnet + NAT does not work for inbound
-  # connections from GitHub's webhook IPs.
   # ===========================================================================
   AtlantisService:
     Type: AWS::ECS::Service
@@ -267,7 +188,7 @@ Resources:
       NetworkConfiguration:
         AwsvpcConfiguration:
           AssignPublicIp: ENABLED
-          Subnets: !Ref PublicSubnetIds
+          Subnets: !Ref PrivateSubnetIds
           SecurityGroups:
             - !Ref AtlantisSGId
       ServiceRegistries:
@@ -285,13 +206,8 @@ Outputs:
       Name: !Sub "${AWS::StackName}-AtlantisServiceName"
 
   AtlantisURL:
-    Description: Atlantis public webhook/UI endpoint (set as GitHub webhook URL)
-    Value: !Ref AtlantisBaseUrl
+    Description: Atlantis webhook/UI endpoint
+    Value: !Sub "http://atlantis.${Environment}.local:4141"
     Export:
       Name: !Sub "${AWS::StackName}-AtlantisURL"
 
-  AtlantisWebhookURL:
-    Description: Full webhook path to register in GitHub repository settings
-    Value: !Sub "${AtlantisBaseUrl}/events"
-    Export:
-      Name: !Sub "${AWS::StackName}-AtlantisWebhookURL"
