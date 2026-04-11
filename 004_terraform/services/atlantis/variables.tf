@@ -1,6 +1,6 @@
 # =============================================================================
 # Atlantis Service — Variables
-# No secrets or account IDs here — derived dynamically from AWS data sources.
+w# No secrets or account IDs here — derived dynamically from AWS data sources.
 # =============================================================================
 
 variable "aws_region" {
@@ -29,6 +29,11 @@ variable "atlantis_image" {
 variable "github_org" {
   type        = string
   description = "GitHub organization name (e.g. 'my-org')"
+}
+
+variable "github_user" {
+  type        = string
+  description = "GitHub username or bot account for Atlantis to use for PR comments"
 }
 
 variable "github_token_secret_name" {

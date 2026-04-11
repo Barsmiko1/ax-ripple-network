@@ -1,7 +1,7 @@
 # =============================================================================
 # Atlantis Service — Main
 # Deploys Atlantis into the shared ECS cluster.
-# All sensitive values are derived dynamically — nothing hardcoded.
+s# All sensitive values are derived dynamically — nothing hardcoded.
 # =============================================================================
 
 # =============================================================================
@@ -55,6 +55,7 @@ resource "aws_cloudformation_stack" "atlantis" {
     GitHubTokenSecretArn        = data.aws_secretsmanager_secret.github_token.arn
     GitHubWebhookSecretArn      = data.aws_secretsmanager_secret.github_webhook.arn
     AtlantisRepoAllowlist       = local.repo_allowlist
+    GitHubUser                  = var.github_user
     TaskCpu                     = var.atlantis_task_cpu
     TaskMemory                  = var.atlantis_task_memory
   }
