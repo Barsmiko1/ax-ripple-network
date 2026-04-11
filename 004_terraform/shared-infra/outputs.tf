@@ -45,6 +45,16 @@ output "atlantis_sg_id" {
   value       = aws_cloudformation_stack.network.outputs["AtlantisSGId"]
 }
 
+output "atlantis_eip_allocation_id" {
+  description = "Allocation ID of the Atlantis Elastic IP (used for EIP association on task start)"
+  value       = aws_cloudformation_stack.network.outputs["AtlantisEIPAllocationId"]
+}
+
+output "atlantis_public_ip" {
+  description = "Fixed public IP for Atlantis — stable across task restarts. Register this as the GitHub webhook URL."
+  value       = aws_cloudformation_stack.network.outputs["AtlantisPublicIp"]
+}
+
 # --- ECS Cluster ---
 output "ecs_cluster_arn" {
   description = "ECS Cluster ARN"
