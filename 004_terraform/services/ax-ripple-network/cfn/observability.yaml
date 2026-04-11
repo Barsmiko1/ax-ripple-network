@@ -105,6 +105,13 @@ Resources:
                   - ec2:DescribeInstances
                   - servicediscovery:DiscoverInstances
                 Resource: "*"
+              # Required for Fargate to mount EFS with TransitEncryption: ENABLED
+              - Effect: Allow
+                Action:
+                  - elasticfilesystem:ClientMount
+                  - elasticfilesystem:ClientWrite
+                  - elasticfilesystem:ClientRootAccess
+                Resource: "*"
 
   # ===========================================================================
   # Log Groups
@@ -138,7 +145,7 @@ Resources:
         - Name: prometheus-data
           EFSVolumeConfiguration:
             FilesystemId: !Ref ObservabilityEFS
-            RootDirectory: /prometheus
+            RootDirectory: /
             TransitEncryption: ENABLED
       ContainerDefinitions:
         - Name: prometheus
@@ -178,7 +185,7 @@ Resources:
         - Name: grafana-data
           EFSVolumeConfiguration:
             FilesystemId: !Ref ObservabilityEFS
-            RootDirectory: /grafana
+            RootDirectory: /
             TransitEncryption: ENABLED
       ContainerDefinitions:
         - Name: grafana
