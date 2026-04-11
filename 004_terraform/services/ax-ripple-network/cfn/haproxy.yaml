@@ -28,9 +28,6 @@ Parameters:
       Amazon Linux 2023 AMI ID — resolved by Terraform via SSM parameter
       /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64
       so CloudFormation does not need ssm:GetParameters.
-  ServiceDiscoveryNamespaceId:
-    Type: String
-    Description: Cloud Map namespace ID (from shared-infra) used for self-registration
 
 Conditions:
   HasKeyPair: !Not [!Equals [!Ref KeyPairName, ""]]
@@ -65,8 +62,6 @@ Resources:
               - Effect: Allow
                 Action:
                   - servicediscovery:DiscoverInstances
-                  # Self-register into Cloud Map on every boot so Prometheus
-                  # can resolve haproxy.<env>.local without manual steps
                   - servicediscovery:RegisterInstance
                   - servicediscovery:DeregisterInstance
                   - servicediscovery:ListServices
@@ -152,10 +147,12 @@ Resources:
             # ----------------------------------------------------------------
             # Self-register this HAProxy instance in Cloud Map so Prometheus
             # can resolve haproxy.<env>.local:8404 via DNS without manual steps.
-            # Idempotent: deregisters any stale instance first, then registers.
+            # Namespace ID is looked up dynamically — no CFN parameter needed.
             # ----------------------------------------------------------------
             PRIVATE_IP=$(curl -sf http://169.254.169.254/latest/meta-data/local-ipv4)
-            NS_ID="${ServiceDiscoveryNamespaceId}"
+            NS_ID=$(aws servicediscovery list-namespaces --region ${AWS::Region} \
+              --query "Namespaces[?Name=='${Environment}.local'].Id" \
+              --output text 2>/dev/null || echo "")
             SVC_ID=$(aws servicediscovery list-services --region ${AWS::Region} \
               --filters "Name=NAMESPACE_ID,Values=$NS_ID,Condition=EQ" \
               --query "Services[?Name=='haproxy'].Id" --output text 2>/dev/null || echo "")
