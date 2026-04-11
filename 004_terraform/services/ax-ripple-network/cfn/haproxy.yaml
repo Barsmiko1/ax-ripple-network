@@ -63,6 +63,12 @@ Resources:
                 Action:
                   - servicediscovery:DiscoverInstances
                 Resource: "*"
+              # Required to re-associate the EIP on instance launch
+              - Effect: Allow
+                Action:
+                  - ec2:AssociateAddress
+                  - ec2:DescribeAddresses
+                Resource: "*"
 
   HAProxyInstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -99,7 +105,6 @@ Resources:
 
             # ----------------------------------------------------------------
             # cfn-bootstrap is pre-installed on this AMI at /opt/aws/bin/
-            # No need to pip-install it — just use it directly.
             # Set up the EXIT trap before set -e so CloudFormation is always
             # signalled on both success and failure.
             # ----------------------------------------------------------------
@@ -114,18 +119,33 @@ Resources:
             set -euo pipefail
 
             # ----------------------------------------------------------------
-            # AL2023 ships curl-minimal — do NOT install full curl (conflicts).
-            # Skip dnf update to avoid slow/unnecessary package churn.
+            # AL2023: curl-minimal pre-installed, skip dnf update
             # ----------------------------------------------------------------
             dnf install -y haproxy jq
-            # curl-minimal is already present on AL2023; no need to install curl
             systemctl enable haproxy
+
+            # ----------------------------------------------------------------
+            # Re-associate the Elastic IP to this instance on every launch
+            # ----------------------------------------------------------------
+            INSTANCE_ID=$(curl -sf http://169.254.169.254/latest/meta-data/instance-id)
+            EIP_ALLOC=$(aws ec2 describe-addresses --region ${AWS::Region} \
+              --query "Addresses[?Tags[?Key=='aws:cloudformation:stack-name'&&Value=='${AWS::StackName}']].AllocationId" \
+              --output text 2>/dev/null || echo "")
+            if [ -n "$EIP_ALLOC" ]; then
+              aws ec2 associate-address --region ${AWS::Region} \
+                --instance-id "$INSTANCE_ID" \
+                --allocation-id "$EIP_ALLOC" \
+                --allow-reassociation
+              echo "EIP $EIP_ALLOC associated with $INSTANCE_ID"
+            fi
 
             cat > /etc/haproxy/haproxy.cfg << 'HAPROXY_CFG'
             global
                 log stdout format raw local0 info
                 maxconn 4096
                 daemon
+                stats socket /run/haproxy/admin.sock mode 660 level admin
+                stats timeout 30s
 
             defaults
                 log     global
@@ -145,6 +165,8 @@ Resources:
                 stats enable
                 stats uri /stats
                 stats refresh 10s
+                stats show-legends
+                stats show-node
                 stats admin if TRUE
 
             frontend http_front
@@ -155,20 +177,40 @@ Resources:
                 bind *:6006
                 default_backend rippled_ws
 
+            frontend grafana_front
+                bind *:3000
+                default_backend grafana_backend
+
+            frontend prometheus_front
+                bind *:9090
+                default_backend prometheus_backend
+
             backend rippled_http
                 balance roundrobin
-                option httpchk GET /
-                server-template api- 1-10 ${ApiNodeDiscoveryEndpoint}:5005 check resolvers dns init-addr none inter 5s fall 3 rise 2
+                option httpchk
+                http-check send meth POST uri / ver HTTP/1.1 hdr Content-Type application/json hdr Content-Length 41 body "{\"method\":\"server_info\",\"params\":[\{\}]}"
+                http-check expect status 200
+                server-template api- 1-10 ${ApiNodeDiscoveryEndpoint}:51234 check resolvers dns init-addr none inter 5s fall 3 rise 2
 
             backend rippled_ws
                 balance roundrobin
-                option httpchk GET /
+                option httpchk
+                http-check send meth POST uri / ver HTTP/1.1 hdr Content-Type application/json hdr Content-Length 41 body "{\"method\":\"server_info\",\"params\":[\{\}]}"
+                http-check expect status 200
                 stick-table type ip size 100k expire 30m
                 stick on src
                 server-template api- 1-10 ${ApiNodeDiscoveryEndpoint}:6006 check resolvers dns init-addr none inter 5s fall 3 rise 2
 
+            backend grafana_backend
+                balance roundrobin
+                server-template grafana- 1-2 grafana.dev.local:3000 check resolvers dns init-addr none inter 10s fall 3 rise 2
+
+            backend prometheus_backend
+                balance roundrobin
+                server-template prometheus- 1-2 prometheus.dev.local:9090 check resolvers dns init-addr none inter 10s fall 3 rise 2
+
             resolvers dns
-                nameserver vpc 10.0.0.2:53
+                nameserver vpc 169.254.169.253:53
                 resolve_retries 3
                 timeout resolve 1s
                 timeout retry   1s

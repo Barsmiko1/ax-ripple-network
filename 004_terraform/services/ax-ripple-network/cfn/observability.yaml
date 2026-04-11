@@ -20,6 +20,9 @@ Parameters:
     Type: String
   HAProxyStatsEndpoint:
     Type: String
+  ServiceDiscoveryNamespaceId:
+    Type: String
+    Description: Shared Cloud Map namespace ID (from ecs-cluster stack)
 
 Resources:
   # ===========================================================================
@@ -127,6 +130,35 @@ Resources:
     Properties:
       LogGroupName: !Sub "/ecs/ax-ripple-${Environment}/grafana"
       RetentionInDays: 14
+
+  # ===========================================================================
+  # Service Discovery — so HAProxy can resolve grafana/prometheus via DNS
+  # ===========================================================================
+  GrafanaServiceDiscovery:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: grafana
+      NamespaceId: !Ref ServiceDiscoveryNamespaceId
+      DnsConfig:
+        RoutingPolicy: MULTIVALUE
+        DnsRecords:
+          - Type: A
+            TTL: 10
+      HealthCheckCustomConfig:
+        FailureThreshold: 1
+
+  PrometheusServiceDiscovery:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: prometheus
+      NamespaceId: !Ref ServiceDiscoveryNamespaceId
+      DnsConfig:
+        RoutingPolicy: MULTIVALUE
+        DnsRecords:
+          - Type: A
+            TTL: 10
+      HealthCheckCustomConfig:
+        FailureThreshold: 1
 
   # ===========================================================================
   # EFS — Access Points (correct ownership per container user)
@@ -268,6 +300,8 @@ Resources:
       TaskDefinition: !Ref PrometheusTaskDefinition
       DesiredCount: 1
       LaunchType: FARGATE
+      ServiceRegistries:
+        - RegistryArn: !GetAtt PrometheusServiceDiscovery.Arn
       NetworkConfiguration:
         AwsvpcConfiguration:
           AssignPublicIp: DISABLED
@@ -284,6 +318,8 @@ Resources:
       TaskDefinition: !Ref GrafanaTaskDefinition
       DesiredCount: 1
       LaunchType: FARGATE
+      ServiceRegistries:
+        - RegistryArn: !GetAtt GrafanaServiceDiscovery.Arn
       NetworkConfiguration:
         AwsvpcConfiguration:
           AssignPublicIp: DISABLED
