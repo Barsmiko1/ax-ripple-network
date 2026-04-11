@@ -1,7 +1,7 @@
 # =============================================================================
 # Atlantis Service — Main
 # Deploys Atlantis into the shared ECS cluster.
-s# All sensitive values are derived dynamically — nothing hardcoded.
+# All sensitive values are derived dynamically — nothing hardcoded.
 # =============================================================================
 
 # =============================================================================
