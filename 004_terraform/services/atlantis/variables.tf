@@ -1,6 +1,6 @@
 # =============================================================================
 # Atlantis Service — Variables
-w# No secrets or account IDs here — derived dynamically from AWS data sources.
+# No secrets or account IDs here — derived dynamically from AWS data sources.
 # =============================================================================
 
 variable "aws_region" {
