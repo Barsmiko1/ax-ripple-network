@@ -170,6 +170,10 @@ aws iam create-open-id-connect-provider \
 # 1b. Create IAM role for GitHub Actions
 #     THIS is the account-specific part — the trust policy locks access
 #     to YOUR GitHub org and repo. Replace <ACCOUNT_ID> and <YOUR_ORG>.
+#
+# Also create the ECS service-linked role (required once per account).
+# Without this, CloudFormation cannot create ECS clusters.
+aws iam create-service-linked-role --aws-service-name ecs.amazonaws.com 2>/dev/null || true
 aws iam create-role \
   --role-name github-actions-role \
   --assume-role-policy-document '{
@@ -232,7 +236,7 @@ aws iam put-role-policy \
           "dynamodb:PutItem",
           "dynamodb:DeleteItem"
         ],
-        "Resource": "arn:aws:dynamodb:*:*:table/ax-ripple-network-terraform-lock"
+        "Resource": "arn:aws:dynamodb:*:*:table/ax-ripple-network-terraform-locks"
       }
     ]
   }'
