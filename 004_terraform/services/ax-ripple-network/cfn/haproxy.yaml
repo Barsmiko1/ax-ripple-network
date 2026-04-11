@@ -98,17 +98,13 @@ Resources:
             exec > >(tee /var/log/haproxy-setup.log) 2>&1
 
             # ----------------------------------------------------------------
-            # Install cfn-bootstrap FIRST, before set -e, so the EXIT trap
-            # signal binary is guaranteed to exist even if later steps fail.
-            # AL2023 ships python3 but NOT pip — install it via dnf first.
+            # cfn-bootstrap is pre-installed on this AMI at /opt/aws/bin/
+            # No need to pip-install it — just use it directly.
+            # Set up the EXIT trap before set -e so CloudFormation is always
+            # signalled on both success and failure.
             # ----------------------------------------------------------------
-            dnf install -y python3-pip
-            pip3 install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz
-            ln -sf /usr/local/bin/cfn-signal /opt/aws/bin/cfn-signal 2>/dev/null || true
-
-            # Always signal CloudFormation on exit (success or failure)
             cfn_signal() {
-              /usr/local/bin/cfn-signal -e "$1" \
+              /opt/aws/bin/cfn-signal -e "$1" \
                 --stack ${AWS::StackName} \
                 --resource HAProxyASG \
                 --region ${AWS::Region}
