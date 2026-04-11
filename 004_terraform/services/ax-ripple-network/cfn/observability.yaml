@@ -228,6 +228,30 @@ Resources:
           MountPoints:
             - SourceVolume: prometheus-data
               ContainerPath: /prometheus
+          # Override entrypoint: write prometheus.yml from PROM_YML env var then exec
+          # prometheus. EFS access point mounts at /prometheus (TSDB data) — NOT at
+          # /etc/prometheus (config). Without this, the container always uses the
+          # default config which only scrapes itself.
+          EntryPoint:
+            - /bin/sh
+            - -c
+          Command:
+            - "printf '%s' \"$PROM_YML\" > /etc/prometheus/prometheus.yml && exec /bin/prometheus --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus --storage.tsdb.retention.time=7d --web.enable-lifecycle"
+          Environment:
+            - Name: PROM_YML
+              Value: !Sub |
+                global:
+                  scrape_interval: 15s
+                  evaluation_interval: 15s
+                scrape_configs:
+                  - job_name: prometheus
+                    static_configs:
+                      - targets: ['localhost:9090']
+                  - job_name: haproxy
+                    scrape_interval: 10s
+                    metrics_path: /metrics
+                    static_configs:
+                      - targets: ['haproxy.${Environment}.local:8404']
           LogConfiguration:
             LogDriver: awslogs
             Options:
