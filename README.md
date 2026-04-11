@@ -330,7 +330,7 @@ chmod +x 003_scripts/bootstrap-backend.sh
 ./003_scripts/bootstrap-backend.sh
 ```
 
-### 2. Set GitHub Org Secret
+### 2. Set GitHub Org Secrets & Variables
 
 ```
 GitHub → Settings → Secrets → Actions → New organization secret
@@ -348,6 +348,32 @@ GitHub → Actions → "Bootstrap Infrastructure" → Run workflow
 
 This deploys: **shared-infra → Atlantis → AX Ripple Network** in order.
 After this, Atlantis is live and manages all future changes via PRs.
+
+### 4. Register the GitHub Webhook for Atlantis
+
+Atlantis only triggers on PRs when GitHub can deliver webhook events to it.
+A dedicated **Elastic IP** is allocated in the shared-infra network stack so
+the address is stable across task restarts — no manual IP updates ever needed.
+
+```bash
+# Get the Atlantis public IP (allocated once in shared-infra, never changes)
+cd 004_terraform/shared-infra
+terraform output atlantis_public_ip
+# → e.g. 54.92.167.244
+```
+
+```
+# Register the webhook in GitHub (one-time setup):
+#   GitHub repo → Settings → Webhooks → Add webhook
+#     Payload URL:   http://<atlantis_public_ip>:4141/events
+#     Content type:  application/json
+#     Secret:        <value of atlantis/webhook-secret in Secrets Manager>
+#     Events:        ✅ Pull requests   ✅ Issue comments   ✅ Push
+```
+
+> The EIP is associated to the Atlantis container's ENI automatically on task
+> startup by an init container (`eip-associate`). If the task restarts, the same
+> EIP re-attaches — the GitHub webhook URL **never needs to change**.
 
 ### 4. Validate & Test
 

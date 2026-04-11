@@ -131,7 +131,7 @@ Resources:
 
   # ===========================================================================
   # Task Definitions — Validators (3 separate, each with unique seed)
-  # VALIDATOR_PUBLIC_KEYS and VALIDATION_SEED both come from Secrets Manager.
+  # VALIDATOR_PUBLIC_KEYS and VALIDATOR_TOKEN both come from Secrets Manager.
   # ===========================================================================
   Validator1TaskDefinition:
     Type: AWS::ECS::TaskDefinition
@@ -172,7 +172,7 @@ Resources:
             - Name: PEER_IPS
               Value: !Sub "ripple-validator.${Environment}.local 51235,ripple-api.${Environment}.local 51235"
           Secrets:
-            - Name: VALIDATION_SEED
+            - Name: VALIDATOR_TOKEN
               ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ax-ripple-${Environment}/validator-seed"
             - Name: VALIDATOR_PUBLIC_KEYS
               ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ax-ripple-${Environment}/validator-public-keys"
@@ -216,7 +216,7 @@ Resources:
             - Name: PEER_IPS
               Value: !Sub "ripple-validator.${Environment}.local 51235,ripple-api.${Environment}.local 51235"
           Secrets:
-            - Name: VALIDATION_SEED
+            - Name: VALIDATOR_TOKEN
               ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ax-ripple-${Environment}/validator-seed-2"
             - Name: VALIDATOR_PUBLIC_KEYS
               ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ax-ripple-${Environment}/validator-public-keys"
@@ -260,7 +260,7 @@ Resources:
             - Name: PEER_IPS
               Value: !Sub "ripple-validator.${Environment}.local 51235,ripple-api.${Environment}.local 51235"
           Secrets:
-            - Name: VALIDATION_SEED
+            - Name: VALIDATOR_TOKEN
               ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ax-ripple-${Environment}/validator-seed-3"
             - Name: VALIDATOR_PUBLIC_KEYS
               ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ax-ripple-${Environment}/validator-public-keys"
