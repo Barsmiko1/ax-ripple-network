@@ -208,19 +208,19 @@ Resources:
   RippledAPISG:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Rippled API traffic (HTTP 51234, WS 6006)
+      GroupDescription: Rippled API traffic (HTTP 5005, WS 6006)
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 51234
           ToPort: 51234
           CidrIp: !Ref VpcCidr
-          Description: Rippled public JSON-RPC (HAProxy backend)
+          Description: Rippled JSON-RPC (internal via HAProxy)
         - IpProtocol: tcp
           FromPort: 6006
           ToPort: 6006
           CidrIp: !Ref VpcCidr
-          Description: Rippled WebSocket (HAProxy backend)
+          Description: Rippled WebSocket (internal via HAProxy)
         - IpProtocol: tcp
           FromPort: 5005
           ToPort: 5005
