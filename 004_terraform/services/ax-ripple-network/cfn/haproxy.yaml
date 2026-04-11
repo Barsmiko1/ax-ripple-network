@@ -121,12 +121,12 @@ Resources:
             }
             trap 'cfn_signal $?' EXIT
 
-            set -euo pipefail
+            set -eo pipefail
 
             # ----------------------------------------------------------------
             # AL2023: curl-minimal pre-installed, skip dnf update
             # ----------------------------------------------------------------
-            dnf install -y haproxy jq
+            dnf install -y haproxy
             systemctl enable haproxy
 
             # ----------------------------------------------------------------
