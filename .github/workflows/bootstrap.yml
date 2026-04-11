@@ -1,0 +1,164 @@
+name: Bootstrap Infrastructure
+
+# =============================================================================
+# ONE-TIME workflow to bootstrap the infrastructure.
+# After this runs, Atlantis is live and manages all future deployments.
+#
+# Run order:
+#   1. Shared Infrastructure (VPC, ECS cluster, SGs)
+#   2. Atlantis service (into the shared ECS cluster)
+#   3. AX Ripple Network service (validators, API nodes, HAProxy)
+#
+# Prerequisites (manual, before first run):
+#   1. AWS IAM OIDC provider for GitHub Actions
+#   2. IAM role with trust policy for this repo (stored as GitHub org secret AWS_ROLE_ARN)
+#   3. S3 bucket + DynamoDB table for Terraform state (or let step 1 create them)
+#   4. Secrets Manager entries: atlantis/github-token, atlantis/webhook-secret
+# =============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      deploy_ripple_network:
+        description: "Also deploy AX Ripple Network service?"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  TF_VERSION: "1.5.0"
+
+jobs:
+  # ===========================================================================
+  # Step 1 — Shared Infrastructure
+  # ===========================================================================
+  shared-infra:
+    name: "1. Deploy Shared Infrastructure"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: 004_terraform/shared-infra
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Plan
+        run: terraform plan -var-file=environments/${{ inputs.environment }}.tfvars -out=tfplan -input=false
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve -input=false tfplan
+
+      - name: Output Summary
+        run: |
+          echo "## ✅ Shared Infrastructure Deployed" >> $GITHUB_STEP_SUMMARY
+          echo "| Output | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| VPC ID | $(terraform output -raw vpc_id) |" >> $GITHUB_STEP_SUMMARY
+          echo "| ECS Cluster | $(terraform output -raw ecs_cluster_name) |" >> $GITHUB_STEP_SUMMARY
+
+  # ===========================================================================
+  # Step 2 — Atlantis Service (so it can manage future deployments)
+  # ===========================================================================
+  atlantis:
+    name: "2. Deploy Atlantis"
+    needs: shared-infra
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: 004_terraform/services/atlantis
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Plan
+        run: terraform plan -var-file=environments/${{ inputs.environment }}.tfvars -out=tfplan -input=false
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve -input=false tfplan
+
+      - name: Output Summary
+        run: |
+          echo "## ✅ Atlantis Deployed" >> $GITHUB_STEP_SUMMARY
+          echo "| Output | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Service | $(terraform output -raw atlantis_service_name) |" >> $GITHUB_STEP_SUMMARY
+          echo "| URL | $(terraform output -raw atlantis_url) |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Atlantis is now live. All future infra changes should be done via PRs." >> $GITHUB_STEP_SUMMARY
+
+  # ===========================================================================
+  # Step 3 — AX Ripple Network Service (optional, can also be done via Atlantis)
+  # ===========================================================================
+  ripple-network:
+    name: "3. Deploy AX Ripple Network"
+    needs: [shared-infra, atlantis]
+    if: inputs.deploy_ripple_network
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: 004_terraform/services/ax-ripple-network
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Plan
+        run: terraform plan -var-file=environments/${{ inputs.environment }}.tfvars -out=tfplan -input=false
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve -input=false tfplan
+
+      - name: Output Summary
+        run: |
+          echo "## ✅ AX Ripple Network Deployed" >> $GITHUB_STEP_SUMMARY
+          echo "| Output | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| HAProxy HTTP | $(terraform output -raw haproxy_http_endpoint) |" >> $GITHUB_STEP_SUMMARY
+          echo "| HAProxy WS | $(terraform output -raw haproxy_ws_endpoint) |" >> $GITHUB_STEP_SUMMARY
+

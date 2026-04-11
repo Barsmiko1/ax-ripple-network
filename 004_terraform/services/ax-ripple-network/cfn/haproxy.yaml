@@ -1,0 +1,232 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  AX Ripple Network — HAProxy Stack
+  EC2 Auto Scaling Group running HAProxy for HTTP + WebSocket load balancing
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+  VpcId:
+    Type: String
+  PublicSubnetIds:
+    Type: CommaDelimitedList
+  HAProxySGId:
+    Type: String
+  InstanceType:
+    Type: String
+    Default: t3.small
+  KeyPairName:
+    Type: String
+    Default: ""
+  ApiNodeDiscoveryEndpoint:
+    Type: String
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64
+
+Conditions:
+  HasKeyPair: !Not [!Equals [!Ref KeyPairName, ""]]
+
+Resources:
+  # ===========================================================================
+  # IAM
+  # ===========================================================================
+  HAProxyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "ax-ripple-${Environment}-haproxy-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+      Policies:
+        - PolicyName: HAProxyAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub "arn:aws:s3:::ax-ripple-${Environment}-configs/*"
+              - Effect: Allow
+                Action:
+                  - servicediscovery:DiscoverInstances
+                Resource: "*"
+
+  HAProxyInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref HAProxyRole
+
+  # ===========================================================================
+  # Launch Template
+  # ===========================================================================
+  HAProxyLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub "ax-ripple-${Environment}-haproxy-lt"
+      LaunchTemplateData:
+        ImageId: !Ref AmiId
+        InstanceType: !Ref InstanceType
+        IamInstanceProfile:
+          Arn: !GetAtt HAProxyInstanceProfile.Arn
+        KeyName: !If [HasKeyPair, !Ref KeyPairName, !Ref "AWS::NoValue"]
+        SecurityGroupIds:
+          - !Ref HAProxySGId
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub "ax-ripple-${Environment}-haproxy"
+              - Key: Role
+                Value: haproxy
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash -xe
+            set -euo pipefail
+            exec > >(tee /var/log/haproxy-setup.log) 2>&1
+
+            dnf update -y
+            dnf install -y haproxy curl jq
+            systemctl enable haproxy
+
+            cat > /etc/haproxy/haproxy.cfg << 'HAPROXY_CFG'
+            global
+                log stdout format raw local0 info
+                maxconn 4096
+                daemon
+
+            defaults
+                log     global
+                mode    http
+                option  httplog
+                option  dontlognull
+                option  forwardfor
+                timeout connect 5000ms
+                timeout client  50000ms
+                timeout server  50000ms
+                timeout tunnel  3600s
+                retries 3
+                option  redispatch
+
+            frontend stats_front
+                bind *:8404
+                stats enable
+                stats uri /stats
+                stats refresh 10s
+                stats admin if TRUE
+
+            frontend http_front
+                bind *:80
+                default_backend rippled_http
+
+            frontend ws_front
+                bind *:6006
+                default_backend rippled_ws
+
+            backend rippled_http
+                balance roundrobin
+                option httpchk GET /
+                server-template api- 1-10 ${ApiNodeDiscoveryEndpoint}:5005 check resolvers dns init-addr none inter 5s fall 3 rise 2
+
+            backend rippled_ws
+                balance roundrobin
+                option httpchk GET /
+                stick-table type ip size 100k expire 30m
+                stick on src
+                server-template api- 1-10 ${ApiNodeDiscoveryEndpoint}:6006 check resolvers dns init-addr none inter 5s fall 3 rise 2
+
+            resolvers dns
+                nameserver vpc 10.0.0.2:53
+                resolve_retries 3
+                timeout resolve 1s
+                timeout retry   1s
+                hold valid      10s
+                accepted_payload_size 8192
+            HAPROXY_CFG
+
+            mkdir -p /run/haproxy
+            haproxy -c -f /etc/haproxy/haproxy.cfg
+            systemctl start haproxy
+
+            /opt/aws/bin/cfn-signal -e $? \
+              --stack ${AWS::StackName} \
+              --resource HAProxyASG \
+              --region ${AWS::Region}
+
+  # ===========================================================================
+  # Auto Scaling Group
+  # ===========================================================================
+  HAProxyASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    CreationPolicy:
+      ResourceSignal:
+        Count: 1
+        Timeout: PT10M
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MinInstancesInService: 1
+        MaxBatchSize: 1
+        PauseTime: PT10M
+        WaitOnResourceSignals: true
+    Properties:
+      AutoScalingGroupName: !Sub "ax-ripple-${Environment}-haproxy-asg"
+      LaunchTemplate:
+        LaunchTemplateId: !Ref HAProxyLaunchTemplate
+        Version: !GetAtt HAProxyLaunchTemplate.LatestVersionNumber
+      MinSize: "1"
+      MaxSize: "2"
+      DesiredCapacity: "1"
+      VPCZoneIdentifier: !Ref PublicSubnetIds
+      HealthCheckType: EC2
+      HealthCheckGracePeriod: 300
+      Tags:
+        - Key: Name
+          Value: !Sub "ax-ripple-${Environment}-haproxy"
+          PropagateAtLaunch: true
+
+  # ===========================================================================
+  # Elastic IP
+  # ===========================================================================
+  HAProxyEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "ax-ripple-${Environment}-haproxy-eip"
+
+Outputs:
+  HAProxyPublicIP:
+    Description: HAProxy public IP address
+    Value: !GetAtt HAProxyEIP.PublicIp
+    Export:
+      Name: !Sub "${AWS::StackName}-HAProxyPublicIP"
+
+  HAProxyHTTPEndpoint:
+    Description: HAProxy HTTP endpoint
+    Value: !Sub "http://${HAProxyEIP.PublicIp}"
+    Export:
+      Name: !Sub "${AWS::StackName}-HAProxyHTTPEndpoint"
+
+  HAProxyWSEndpoint:
+    Description: HAProxy WebSocket endpoint
+    Value: !Sub "ws://${HAProxyEIP.PublicIp}:6006"
+    Export:
+      Name: !Sub "${AWS::StackName}-HAProxyWSEndpoint"
+
+  HAProxyStatsEndpoint:
+    Description: HAProxy Stats endpoint
+    Value: !Sub "http://${HAProxyEIP.PublicIp}:8404/stats"
+    Export:
+      Name: !Sub "${AWS::StackName}-HAProxyStatsEndpoint"
+

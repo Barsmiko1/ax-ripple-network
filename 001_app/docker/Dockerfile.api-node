@@ -1,0 +1,98 @@
+# =============================================================================
+# Dockerfile — Rippled API (Stock) Node (Multi-Stage)
+# =============================================================================
+# Multi-stage build for minimal production image.
+#   Stage 1 (builder): Install rippled from apt with all build deps
+#   Stage 2 (runtime): Copy only the rippled binary + runtime libs
+#
+# Build:
+#   docker build -t ax-ripple-api-node -f Dockerfile.api-node .
+#
+# The build context should be the repo root so 002_configs/ is accessible.
+# =============================================================================
+
+# ===========================================================================
+# Stage 1 — Builder: Install rippled + capture binary & shared libraries
+# ===========================================================================
+FROM ubuntu:22.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    gnupg \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Add Ripple apt repository and install rippled
+RUN mkdir -p /usr/local/share/keyrings && \
+    wget -q -O - "https://repos.ripple.com/repos/api/gpg/key/public" | \
+    gpg --dearmor > /usr/local/share/keyrings/ripple.gpg && \
+    echo "deb [signed-by=/usr/local/share/keyrings/ripple.gpg] https://repos.ripple.com/repos/rippled-deb focal stable" \
+    > /etc/apt/sources.list.d/ripple.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends rippled && \
+    rm -rf /var/lib/apt/lists/*
+
+# Collect rippled's shared library dependencies for the runtime stage
+RUN mkdir -p /runtime/lib && \
+    ldd /opt/ripple/bin/rippled | grep "=> /" | awk '{print $3}' | \
+    xargs -I{} cp --parents {} /runtime/ && \
+    cp /opt/ripple/bin/rippled /runtime/
+
+# ===========================================================================
+# Stage 2 — Runtime: Slim Debian with only rippled + curl for healthcheck
+# ===========================================================================
+FROM debian:bookworm-slim AS runtime
+
+LABEL maintainer="AX Ripple Network Team"
+LABEL description="Rippled API node for AX Ripple Network"
+LABEL role="api-node"
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install only curl + bash (required for HEALTHCHECK and entrypoint)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    bash \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy rippled binary + shared libraries from builder
+COPY --from=builder /runtime/opt/ripple/bin/rippled /usr/local/bin/rippled
+COPY --from=builder /runtime/lib/ /lib/
+COPY --from=builder /runtime/usr/lib/ /usr/lib/
+
+# Create non-root user for security
+RUN groupadd -r rippled && useradd -r -g rippled -m rippled
+
+# Create data and log directories
+RUN mkdir -p /var/lib/rippled/db /var/log/rippled /etc/opt/ripple && \
+    chown -R rippled:rippled /var/lib/rippled /var/log/rippled /etc/opt/ripple
+
+# Copy API node configuration
+COPY --chown=rippled:rippled 002_configs/rippled/api-node.cfg /etc/opt/ripple/rippled.cfg
+
+# Copy entrypoint script (handles peer discovery + validators.txt)
+COPY --chown=rippled:rippled 001_app/docker/entrypoint-api-node.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# Expose ports:
+#   5005  - HTTP JSON-RPC (HAProxy backend)
+#   6006  - WebSocket (HAProxy backend)
+#   51235 - Peer protocol (internal mesh)
+EXPOSE 5005 6006 51235
+
+# Health check — rippled JSON-RPC
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+    CMD curl -sf http://127.0.0.1:5005/ || exit 1
+
+# Data volume
+VOLUME ["/var/lib/rippled/db"]
+
+# Run as non-root
+USER rippled
+
+# Entrypoint handles peer config, validators.txt, then starts rippled
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+

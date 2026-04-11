@@ -1,0 +1,251 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  AX Ripple Network — Observability Stack
+  Prometheus and Grafana on ECS with EFS persistent storage
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+  VpcId:
+    Type: String
+  PrivateSubnetIds:
+    Type: CommaDelimitedList
+  PrometheusSGId:
+    Type: String
+  ECSClusterArn:
+    Type: String
+  ApiNodeDiscoveryEndpoint:
+    Type: String
+  HAProxyStatsEndpoint:
+    Type: String
+
+Resources:
+  # ===========================================================================
+  # EFS — Persistent Storage
+  # ===========================================================================
+  ObservabilityEFS:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      Encrypted: true
+      PerformanceMode: generalPurpose
+      ThroughputMode: bursting
+      FileSystemTags:
+        - Key: Name
+          Value: !Sub "ax-ripple-${Environment}-observability-efs"
+
+  EFSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: EFS mount target security group
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          SourceSecurityGroupId: !Ref PrometheusSGId
+      Tags:
+        - Key: Name
+          Value: !Sub "ax-ripple-${Environment}-efs-sg"
+
+  EFSMountTarget1:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref ObservabilityEFS
+      SubnetId: !Select [0, !Ref PrivateSubnetIds]
+      SecurityGroups:
+        - !Ref EFSSecurityGroup
+
+  EFSMountTarget2:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref ObservabilityEFS
+      SubnetId: !Select [1, !Ref PrivateSubnetIds]
+      SecurityGroups:
+        - !Ref EFSSecurityGroup
+
+  # ===========================================================================
+  # IAM
+  # ===========================================================================
+  ObservabilityExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "ax-ripple-${Environment}-observability-execution"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  ObservabilityTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "ax-ripple-${Environment}-observability-task"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ObservabilityPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecs:ListTasks
+                  - ecs:DescribeTasks
+                  - ec2:DescribeInstances
+                  - servicediscovery:DiscoverInstances
+                Resource: "*"
+
+  # ===========================================================================
+  # Log Groups
+  # ===========================================================================
+  PrometheusLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/ax-ripple-${Environment}/prometheus"
+      RetentionInDays: 14
+
+  GrafanaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/ax-ripple-${Environment}/grafana"
+      RetentionInDays: 14
+
+  # ===========================================================================
+  # Task Definition — Prometheus
+  # ===========================================================================
+  PrometheusTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "ax-ripple-${Environment}-prometheus"
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: "512"
+      Memory: "1024"
+      ExecutionRoleArn: !GetAtt ObservabilityExecutionRole.Arn
+      TaskRoleArn: !GetAtt ObservabilityTaskRole.Arn
+      Volumes:
+        - Name: prometheus-data
+          EFSVolumeConfiguration:
+            FilesystemId: !Ref ObservabilityEFS
+            RootDirectory: /prometheus
+            TransitEncryption: ENABLED
+      ContainerDefinitions:
+        - Name: prometheus
+          Image: prom/prometheus:v2.51.0
+          Essential: true
+          PortMappings:
+            - ContainerPort: 9090
+          MountPoints:
+            - SourceVolume: prometheus-data
+              ContainerPath: /prometheus
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref PrometheusLogGroup
+              awslogs-region: !Ref "AWS::Region"
+              awslogs-stream-prefix: prometheus
+          Command:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+            - "--storage.tsdb.path=/prometheus"
+            - "--storage.tsdb.retention.time=7d"
+            - "--web.enable-lifecycle"
+
+  # ===========================================================================
+  # Task Definition — Grafana
+  # ===========================================================================
+  GrafanaTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "ax-ripple-${Environment}-grafana"
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: "256"
+      Memory: "512"
+      ExecutionRoleArn: !GetAtt ObservabilityExecutionRole.Arn
+      TaskRoleArn: !GetAtt ObservabilityTaskRole.Arn
+      Volumes:
+        - Name: grafana-data
+          EFSVolumeConfiguration:
+            FilesystemId: !Ref ObservabilityEFS
+            RootDirectory: /grafana
+            TransitEncryption: ENABLED
+      ContainerDefinitions:
+        - Name: grafana
+          Image: grafana/grafana:10.4.0
+          Essential: true
+          PortMappings:
+            - ContainerPort: 3000
+          MountPoints:
+            - SourceVolume: grafana-data
+              ContainerPath: /var/lib/grafana
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref GrafanaLogGroup
+              awslogs-region: !Ref "AWS::Region"
+              awslogs-stream-prefix: grafana
+          Environment:
+            - Name: GF_SECURITY_ADMIN_USER
+              Value: admin
+            - Name: GF_SECURITY_ADMIN_PASSWORD
+              Value: admin
+
+  # ===========================================================================
+  # ECS Services
+  # ===========================================================================
+  PrometheusService:
+    Type: AWS::ECS::Service
+    DependsOn: [EFSMountTarget1, EFSMountTarget2]
+    Properties:
+      ServiceName: !Sub "ax-ripple-${Environment}-prometheus"
+      Cluster: !Ref ECSClusterArn
+      TaskDefinition: !Ref PrometheusTaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets: !Ref PrivateSubnetIds
+          SecurityGroups:
+            - !Ref PrometheusSGId
+
+  GrafanaService:
+    Type: AWS::ECS::Service
+    DependsOn: [EFSMountTarget1, EFSMountTarget2]
+    Properties:
+      ServiceName: !Sub "ax-ripple-${Environment}-grafana"
+      Cluster: !Ref ECSClusterArn
+      TaskDefinition: !Ref GrafanaTaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets: !Ref PrivateSubnetIds
+          SecurityGroups:
+            - !Ref PrometheusSGId
+
+Outputs:
+  PrometheusServiceArn:
+    Description: Prometheus ECS Service ARN
+    Value: !Ref PrometheusService
+    Export:
+      Name: !Sub "${AWS::StackName}-PrometheusServiceArn"
+
+  GrafanaServiceArn:
+    Description: Grafana ECS Service ARN
+    Value: !Ref GrafanaService
+    Export:
+      Name: !Sub "${AWS::StackName}-GrafanaServiceArn"
+

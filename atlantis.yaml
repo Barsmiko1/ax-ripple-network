@@ -1,0 +1,102 @@
+version: 3
+automerge: false
+parallel_plan: true
+parallel_apply: false
+
+# =============================================================================
+# Atlantis PR-Driven Terraform Workflow — Modular Architecture
+# =============================================================================
+#
+# Three independent Terraform root modules, each with its own state:
+#
+#   1. shared-infra         → VPC, ECS cluster, SGs, service discovery
+#   2. ax-ripple-network    → Rippled validators, API nodes, HAProxy, observability
+#   3. atlantis             → Atlantis server running on the shared ECS cluster
+#
+# Deployment order:
+#   shared-infra MUST be applied before any service.
+#   Services can be applied independently of each other.
+#
+# Flow:
+#   PR opened/updated → Atlantis auto-runs `terraform plan` per modified project
+#   PR approved       → Developer comments `atlantis apply -p <project-name>`
+#   Atlantis          → `terraform apply` → CloudFormation → AWS
+# =============================================================================
+
+projects:
+  # ---------------------------------------------------------------------------
+  # Shared Infrastructure (deploy FIRST)
+  # ---------------------------------------------------------------------------
+  - name: shared-infra
+    dir: 004_terraform/shared-infra
+    workspace: default
+    terraform_version: v1.5.0
+    autoplan:
+      when_modified:
+        - "**/*.tf"
+        - "**/*.tfvars"
+        - "cfn/**/*.yaml"
+      enabled: true
+    apply_requirements:
+      - approved
+      - mergeable
+    workflow: shared-infra
+
+  # ---------------------------------------------------------------------------
+  # AX Ripple Network Service
+  # ---------------------------------------------------------------------------
+  - name: ax-ripple-network
+    dir: 004_terraform/services/ax-ripple-network
+    workspace: default
+    terraform_version: v1.5.0
+    autoplan:
+      when_modified:
+        - "**/*.tf"
+        - "**/*.tfvars"
+        - "cfn/**/*.yaml"
+      enabled: true
+    apply_requirements:
+      - approved
+      - mergeable
+    workflow: service
+
+  # ---------------------------------------------------------------------------
+  # Atlantis Service
+  # ---------------------------------------------------------------------------
+  - name: atlantis
+    dir: 004_terraform/services/atlantis
+    workspace: default
+    terraform_version: v1.5.0
+    autoplan:
+      when_modified:
+        - "**/*.tf"
+        - "**/*.tfvars"
+        - "cfn/**/*.yaml"
+      enabled: true
+    apply_requirements:
+      - approved
+      - mergeable
+    workflow: service
+
+workflows:
+  shared-infra:
+    plan:
+      steps:
+        - init:
+            extra_args: ["-upgrade"]
+        - plan:
+            extra_args: ["-var-file=environments/dev.tfvars"]
+    apply:
+      steps:
+        - apply
+
+  service:
+    plan:
+      steps:
+        - init:
+            extra_args: ["-upgrade"]
+        - plan:
+            extra_args: ["-var-file=environments/dev.tfvars"]
+    apply:
+      steps:
+        - apply

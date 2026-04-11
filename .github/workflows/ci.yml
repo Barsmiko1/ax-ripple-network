@@ -1,0 +1,362 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "004_terraform/**"
+      - "001_app/**"
+      - "002_configs/**"
+      - ".github/workflows/ci.yml"
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  # ===========================================================================
+  # Linting — runs on pull_request only
+  # ===========================================================================
+  mega-linter:
+    name: MegaLinter
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oxsecurity/megalinter@v7
+        env:
+          VALIDATE_ALL_CODEBASE: false
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: MegaLinter-reports
+          path: megalinter-reports
+
+  # ===========================================================================
+  # Docker Lint — runs on pull_request only
+  # ===========================================================================
+  docker-lint:
+    name: Dockerfile Lint (${{ matrix.image }})
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - dockerfile: 001_app/docker/Dockerfile.validator
+            image: validator
+          - dockerfile: 001_app/docker/Dockerfile.api-node
+            image: api-node
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: ${{ matrix.dockerfile }}
+          failure-threshold: warning
+
+  # ===========================================================================
+  # Docker Build & Push to ECR — runs on pull_request
+  #
+  # Builds images BEFORE Atlantis plans, so terraform plan references
+  # an image that actually exists in ECR.
+  #
+  # Tag format: r-1.0.X (same tag used for Docker image, Git tag, and release)
+  # ===========================================================================
+  docker-build-push:
+    name: Docker Build & Push to ECR
+    if: github.event_name == 'pull_request'
+    needs: docker-lint
+    runs-on: ubuntu-latest
+    environment: dev
+    outputs:
+      image-tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine next release version
+        id: version
+        run: |
+          # Find the latest r-1.0.X tag (X = 0–9)
+          LATEST=$(git tag --list 'r-1.0.[0-9]' --sort=-v:refname | head -1)
+          if [ -z "$LATEST" ]; then
+            NEXT="r-1.0.0"
+          else
+            PATCH=$(echo "$LATEST" | sed 's/r-1\.0\.//')
+            if [ "$PATCH" -ge 9 ]; then
+              echo "❌ Maximum patch version (r-1.0.9) reached. Bump minor version manually."
+              exit 1
+            fi
+            NEXT="r-1.0.$((PATCH + 1))"
+          fi
+          echo "tag=${NEXT}" >> $GITHUB_OUTPUT
+          echo "📦 Image tag: ${NEXT}"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build & push Validator image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: 001_app/docker/Dockerfile.validator
+          push: true
+          tags: ${{ steps.ecr-login.outputs.registry }}/ax-ripple-dev/validator:${{ steps.version.outputs.tag }}
+          cache-from: type=gha,scope=validator
+          cache-to: type=gha,mode=max,scope=validator
+
+      - name: Build & push API Node image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: 001_app/docker/Dockerfile.api-node
+          push: true
+          tags: ${{ steps.ecr-login.outputs.registry }}/ax-ripple-dev/api-node:${{ steps.version.outputs.tag }}
+          cache-from: type=gha,scope=api-node
+          cache-to: type=gha,mode=max,scope=api-node
+
+      - name: Post image tag as PR comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = '${{ steps.version.outputs.tag }}';
+            const body = [
+              '## 🐳 Docker Images Pushed to ECR',
+              '',
+              '| Image | Tag |',
+              '|-------|-----|',
+              `| Validator | \`${tag}\` |`,
+              `| API Node  | \`${tag}\` |`,
+              '',
+              '### Atlantis Usage',
+              'To plan/apply with this build, comment:',
+              '```',
+              `atlantis plan -p ax-ripple-network -- -var="validator_image_tag=${tag}" -var="api_node_image_tag=${tag}"`,
+              `atlantis apply -p ax-ripple-network -- -var="validator_image_tag=${tag}" -var="api_node_image_tag=${tag}"`,
+              '```',
+            ].join('\n');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body
+            });
+
+      - name: Summary
+        run: |
+          echo "## 🐳 Docker Images Pushed to ECR" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | Tag |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-----|" >> $GITHUB_STEP_SUMMARY
+          echo "| Validator | \`${{ steps.version.outputs.tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| API Node  | \`${{ steps.version.outputs.tag }}\` |" >> $GITHUB_STEP_SUMMARY
+
+  # ===========================================================================
+  # Terraform Validation — runs on pull_request only
+  # Validates all three root modules. Atlantis handles plan/apply.
+  # ===========================================================================
+  terraform-validate:
+    name: Terraform Validate (${{ matrix.module }})
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        module:
+          - shared-infra
+          - services/ax-ripple-network
+          - services/atlantis
+    defaults:
+      run:
+        working-directory: 004_terraform/${{ matrix.module }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.0"
+      - run: terraform fmt -check -recursive -diff
+      - run: terraform init -backend=false
+      - run: terraform validate
+
+  # ===========================================================================
+  # CloudFormation Lint — runs on pull_request only
+  # ===========================================================================
+  cfn-lint:
+    name: CloudFormation Lint
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install cfn-lint
+      - run: find 004_terraform -name '*.yaml' -path '*/cfn/*' | xargs cfn-lint
+
+  # ===========================================================================
+  # Client Validation — runs on pull_request only
+  # ===========================================================================
+  client-validate:
+    name: Client Validation
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: 001_app/client
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: 001_app/client/package-lock.json
+      - run: npm ci || npm install
+      - run: node -c client.js
+
+  # ===========================================================================
+  # Shell Scripts Lint — runs on pull_request only
+  # ===========================================================================
+  shellcheck:
+    name: Shell Scripts
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: 003_scripts
+
+  # ===========================================================================
+  # Promote + Release — runs on push to main (PR merged)
+  #
+  # After Atlantis has applied and the PR is merged:
+  #   1. Determine the r-1.0.X version (same as the one built during PR)
+  #   2. Re-tag the r-1.0.X images as :latest in ECR
+  #   3. Create a Git tag + GitHub release with r-1.0.X
+  # ===========================================================================
+  promote-and-release:
+    name: Promote Images & Create Release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine release version
+        id: version
+        run: |
+          # Find the latest r-1.0.X tag already created
+          LATEST=$(git tag --list 'r-1.0.[0-9]' --sort=-v:refname | head -1)
+          if [ -z "$LATEST" ]; then
+            NEXT="r-1.0.0"
+          else
+            PATCH=$(echo "$LATEST" | sed 's/r-1\.0\.//')
+            if [ "$PATCH" -ge 9 ]; then
+              echo "❌ Maximum patch version (r-1.0.9) reached. Bump minor version manually."
+              exit 1
+            fi
+            NEXT="r-1.0.$((PATCH + 1))"
+          fi
+          echo "tag=${NEXT}" >> $GITHUB_OUTPUT
+          echo "📦 Release: ${NEXT}"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Promote images to :latest
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          for repo in ax-ripple-dev/validator ax-ripple-dev/api-node; do
+            MANIFEST=$(aws ecr batch-get-image \
+              --repository-name "${repo}" \
+              --image-ids imageTag="${IMAGE_TAG}" \
+              --query 'images[0].imageManifest' \
+              --output text 2>/dev/null || true)
+
+            if [ -n "$MANIFEST" ] && [ "$MANIFEST" != "None" ]; then
+              aws ecr put-image \
+                --repository-name "${repo}" \
+                --image-tag latest \
+                --image-manifest "$MANIFEST" 2>/dev/null || true
+              echo "✅ ${repo}:${IMAGE_TAG} → :latest"
+            else
+              echo "⚠️  ${repo}:${IMAGE_TAG} not found in ECR, skipping promote"
+            fi
+          done
+
+      - name: Create Git tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
+          git push origin "${{ steps.version.outputs.tag }}"
+
+      - name: Create GitHub Release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = '${{ steps.version.outputs.tag }}';
+            const sha = '${{ github.sha }}';
+            const { data: release } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tag,
+              name: `Release ${tag}`,
+              body: [
+                `## Release ${tag}`,
+                '',
+                `**Commit:** \`${sha}\``,
+                '',
+                '### Docker Images',
+                `| Image | Tag |`,
+                `|-------|-----|`,
+                `| Validator | \`${tag}\` (\`:latest\`) |`,
+                `| API Node  | \`${tag}\` (\`:latest\`) |`,
+                '',
+                '### Infrastructure',
+                'Applied via Atlantis before merge.',
+              ].join('\n'),
+              draft: false,
+              prerelease: false,
+            });
+            console.log(`✅ Created release: ${release.html_url}`);
+
+      - name: Summary
+        run: |
+          echo "## 📦 Release Created" >> $GITHUB_STEP_SUMMARY
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Tag** | \`${{ steps.version.outputs.tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Commit** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Images** | Promoted to \`:latest\` |" >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Git
+.git/
+.github/
+
+# Terraform state & plugins
+004_terraform/.terraform/
+004_terraform/*.tfstate*
+004_terraform/tfplan
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment files
+.env
+

@@ -1,0 +1,339 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  AX Ripple Network — ECS Services Stack
+  Task definitions, ECS services, ECR repos, service discovery entries.
+  Deploys into the shared ECS cluster.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+  VpcId:
+    Type: String
+  PrivateSubnetIds:
+    Type: CommaDelimitedList
+  RippledPeerSGId:
+    Type: String
+  RippledAPISGId:
+    Type: String
+  ECSClusterArn:
+    Type: String
+    Description: Shared ECS Cluster ARN
+  ECSTaskExecutionRoleArn:
+    Type: String
+    Description: Shared ECS Task Execution Role ARN
+  ServiceDiscoveryNamespaceId:
+    Type: String
+    Description: Shared Service Discovery namespace ID
+  ValidatorImage:
+    Type: String
+    Description: ECR image URI for validator containers
+  ApiNodeImage:
+    Type: String
+    Description: ECR image URI for API node containers
+  ValidatorDesiredCount:
+    Type: Number
+    Default: 3
+  ApiNodeDesiredCount:
+    Type: Number
+    Default: 2
+  TaskCpu:
+    Type: String
+    Default: "1024"
+  TaskMemory:
+    Type: String
+    Default: "2048"
+  ValidatorPublicKeys:
+    Type: String
+    Description: Comma-separated validator public keys for the UNL (validators.txt)
+    Default: ""
+
+Resources:
+  # ===========================================================================
+  # ECR Repositories
+  # ===========================================================================
+  ValidatorECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "ax-ripple-${Environment}/validator"
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      ImageTagMutability: IMMUTABLE
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [{
+              "rulePriority": 1,
+              "description": "Keep last 10 images",
+              "selection": { "tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 10 },
+              "action": { "type": "expire" }
+            }]
+          }
+      Tags:
+        - Key: Role
+          Value: validator
+
+  ApiNodeECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "ax-ripple-${Environment}/api-node"
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      ImageTagMutability: IMMUTABLE
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [{
+              "rulePriority": 1,
+              "description": "Keep last 10 images",
+              "selection": { "tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 10 },
+              "action": { "type": "expire" }
+            }]
+          }
+      Tags:
+        - Key: Role
+          Value: api-node
+
+  # ===========================================================================
+  # CloudWatch Log Groups
+  # ===========================================================================
+  ValidatorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/ax-ripple-${Environment}/validator"
+      RetentionInDays: 30
+
+  ApiNodeLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/ax-ripple-${Environment}/api-node"
+      RetentionInDays: 30
+
+  # ===========================================================================
+  # Service Discovery Entries (into shared namespace)
+  # ===========================================================================
+  ValidatorServiceDiscovery:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: ripple-validator
+      NamespaceId: !Ref ServiceDiscoveryNamespaceId
+      DnsConfig:
+        RoutingPolicy: MULTIVALUE
+        DnsRecords:
+          - Type: A
+            TTL: 10
+      HealthCheckCustomConfig:
+        FailureThreshold: 1
+
+  ApiNodeServiceDiscovery:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: ripple-api
+      NamespaceId: !Ref ServiceDiscoveryNamespaceId
+      DnsConfig:
+        RoutingPolicy: MULTIVALUE
+        DnsRecords:
+          - Type: A
+            TTL: 10
+      HealthCheckCustomConfig:
+        FailureThreshold: 1
+
+  # ===========================================================================
+  # IAM — Ripple-specific task role (S3 config access)
+  # ===========================================================================
+  RippledTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "ax-ripple-${Environment}-rippled-task"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: RippledTaskPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub "arn:aws:s3:::ax-ripple-${Environment}-configs/*"
+
+  # ===========================================================================
+  # Task Definition — Validator
+  # ===========================================================================
+  ValidatorTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "ax-ripple-${Environment}-validator"
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      ExecutionRoleArn: !Ref ECSTaskExecutionRoleArn
+      TaskRoleArn: !GetAtt RippledTaskRole.Arn
+      ContainerDefinitions:
+        - Name: rippled-validator
+          Image: !Ref ValidatorImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 51235
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref ValidatorLogGroup
+              awslogs-region: !Ref "AWS::Region"
+              awslogs-stream-prefix: validator
+          HealthCheck:
+            Command: ["CMD-SHELL", "curl -sf http://localhost:5005/ || exit 1"]
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 120
+          Environment:
+            - Name: RIPPLED_ROLE
+              Value: validator
+            - Name: ENVIRONMENT
+              Value: !Ref Environment
+            - Name: NETWORK_ID
+              Value: "10000"
+            - Name: VALIDATOR_PUBLIC_KEYS
+              Value: !Ref ValidatorPublicKeys
+            - Name: PEER_IPS
+              Value: !Sub "ripple-validator.${Environment}.local 51235,ripple-api.${Environment}.local 51235"
+          Secrets:
+            - Name: VALIDATION_SEED
+              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ax-ripple-${Environment}/validator-seed"
+
+  # ===========================================================================
+  # Task Definition — API Node
+  # ===========================================================================
+  ApiNodeTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "ax-ripple-${Environment}-api-node"
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      ExecutionRoleArn: !Ref ECSTaskExecutionRoleArn
+      TaskRoleArn: !GetAtt RippledTaskRole.Arn
+      ContainerDefinitions:
+        - Name: rippled-api
+          Image: !Ref ApiNodeImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 5005
+              Protocol: tcp
+            - ContainerPort: 6006
+              Protocol: tcp
+            - ContainerPort: 51235
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref ApiNodeLogGroup
+              awslogs-region: !Ref "AWS::Region"
+              awslogs-stream-prefix: api-node
+          HealthCheck:
+            Command: ["CMD-SHELL", "curl -sf http://localhost:5005/ || exit 1"]
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 120
+          Environment:
+            - Name: RIPPLED_ROLE
+              Value: api
+            - Name: ENVIRONMENT
+              Value: !Ref Environment
+            - Name: NETWORK_ID
+              Value: "10000"
+            - Name: VALIDATOR_PUBLIC_KEYS
+              Value: !Ref ValidatorPublicKeys
+            - Name: PEER_IPS
+              Value: !Sub "ripple-validator.${Environment}.local 51235,ripple-api.${Environment}.local 51235"
+
+  # ===========================================================================
+  # ECS Service — Validators
+  # ===========================================================================
+  ValidatorService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub "ax-ripple-${Environment}-validators"
+      Cluster: !Ref ECSClusterArn
+      TaskDefinition: !Ref ValidatorTaskDefinition
+      DesiredCount: !Ref ValidatorDesiredCount
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets: !Ref PrivateSubnetIds
+          SecurityGroups:
+            - !Ref RippledPeerSGId
+      ServiceRegistries:
+        - RegistryArn: !GetAtt ValidatorServiceDiscovery.Arn
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 50
+        MaximumPercent: 200
+      EnableExecuteCommand: true
+
+  # ===========================================================================
+  # ECS Service — API Nodes
+  # ===========================================================================
+  ApiNodeService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub "ax-ripple-${Environment}-api-nodes"
+      Cluster: !Ref ECSClusterArn
+      TaskDefinition: !Ref ApiNodeTaskDefinition
+      DesiredCount: !Ref ApiNodeDesiredCount
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets: !Ref PrivateSubnetIds
+          SecurityGroups:
+            - !Ref RippledPeerSGId
+            - !Ref RippledAPISGId
+      ServiceRegistries:
+        - RegistryArn: !GetAtt ApiNodeServiceDiscovery.Arn
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 50
+        MaximumPercent: 200
+      EnableExecuteCommand: true
+
+Outputs:
+  ApiNodeServiceName:
+    Description: API Node ECS Service Name
+    Value: !GetAtt ApiNodeService.Name
+    Export:
+      Name: !Sub "${AWS::StackName}-ApiNodeServiceName"
+
+  ApiNodeDiscoveryEndpoint:
+    Description: DNS endpoint for API nodes
+    Value: !Sub "ripple-api.${Environment}.local"
+    Export:
+      Name: !Sub "${AWS::StackName}-ApiNodeDiscoveryEndpoint"
+
+  ValidatorECRRepositoryUri:
+    Description: ECR repository URI for validator images
+    Value: !GetAtt ValidatorECRRepository.RepositoryUri
+    Export:
+      Name: !Sub "${AWS::StackName}-ValidatorECRRepositoryUri"
+
+  ApiNodeECRRepositoryUri:
+    Description: ECR repository URI for API node images
+    Value: !GetAtt ApiNodeECRRepository.RepositoryUri
+    Export:
+      Name: !Sub "${AWS::StackName}-ApiNodeECRRepositoryUri"
+

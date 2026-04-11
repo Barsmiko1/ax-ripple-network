@@ -1,0 +1,29 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:base"],
+  "labels": ["dependencies"],
+  "automerge": true,
+  "automergeType": "pr",
+  "packageRules": [
+    {
+      "matchUpdateTypes": ["patch"],
+      "automerge": true
+    },
+    {
+      "matchManagers": ["terraform"],
+      "labels": ["terraform", "dependencies"],
+      "reviewers": ["team:devops"]
+    },
+    {
+      "matchManagers": ["npm"],
+      "labels": ["node", "dependencies"]
+    }
+  ],
+  "terraform": {
+    "lockFileMaintenance": {
+      "enabled": true,
+      "schedule": ["before 5am on Monday"]
+    }
+  }
+}
+

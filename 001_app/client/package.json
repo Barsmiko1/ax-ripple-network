@@ -1,0 +1,32 @@
+{
+  "name": "@ax/ripple-client",
+  "version": "1.0.0",
+  "description": "WebSocket failover test client for AX Ripple Network",
+  "main": "client.js",
+  "scripts": {
+    "start": "node client.js",
+    "test": "node --test test/client.test.js",
+    "lint": "eslint ."
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "ws": "^8.16.0",
+    "dotenv": "^16.4.0",
+    "dotenv-expand": "^11.0.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.56.0"
+  },
+  "keywords": [
+    "ripple",
+    "xrpl",
+    "websocket",
+    "failover",
+    "blockchain"
+  ],
+  "author": "AX Ripple Network Team",
+  "license": "MIT",
+  "private": true
+}
