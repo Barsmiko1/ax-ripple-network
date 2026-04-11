@@ -1,17 +1,6 @@
 # =============================================================================
 # Dockerfile — Rippled API (Stock) Node (Multi-Stage)
 # =============================================================================
-# Lightweight production image for rippled API/proxy nodes.
-#   Stage 1 (builder): Add Ripple apt repo GPG key
-#   Stage 2 (runtime): Install rippled + minimal runtime deps
-#
-# Build:
-#   docker build -t ax-ripple-api-node -f Dockerfile.api-node .
-#   # On Apple Silicon (ARM) machines, add: --platform linux/amd64
-#
-# The build context should be the repo root so 002_configs/ is accessible.
-# =============================================================================
-
 # ===========================================================================
 # Stage 1 — Builder: Fetch GPG key for Ripple apt repository
 # ===========================================================================
@@ -69,6 +58,10 @@ RUN mkdir -p /var/lib/rippled/db /var/log/rippled /etc/opt/ripple && \
 
 # Copy API node configuration
 COPY --chown=rippled:rippled 002_configs/rippled/api-node.cfg /etc/opt/ripple/rippled.cfg
+
+# Copy a blank validators.txt to override the mainnet default installed by the rippled package.
+# The entrypoint will overwrite this with private network keys from Secrets Manager at runtime.
+COPY --chown=rippled:rippled 002_configs/rippled/validators.txt /etc/opt/ripple/validators.txt
 
 # Copy entrypoint script (handles peer discovery + validators.txt)
 COPY --chown=rippled:rippled 001_app/docker/entrypoint-api-node.sh /usr/local/bin/entrypoint.sh

@@ -44,10 +44,9 @@ Parameters:
   TaskMemory:
     Type: String
     Default: "2048"
-  ValidatorPublicKeys:
-    Type: String
-    Description: Comma-separated validator public keys for the UNL (validators.txt)
-    Default: ""
+  # ValidatorPublicKeys is stored in Secrets Manager:
+  #   ax-ripple-<env>/validator-public-keys
+  # and injected into containers via ECS Secrets — NOT passed as a parameter.
 
 Resources:
   # ===========================================================================
@@ -102,7 +101,7 @@ Resources:
         FailureThreshold: 1
 
   # ===========================================================================
-  # IAM — Ripple-specific task role (S3 config access)
+  # IAM — Ripple-specific task role
   # ===========================================================================
   RippledTaskRole:
     Type: AWS::IAM::Role
@@ -131,10 +130,8 @@ Resources:
                 Resource: !Sub "arn:aws:s3:::ax-ripple-${Environment}-configs/*"
 
   # ===========================================================================
-  # Task Definitions — Validators (one per validator, each with unique seed)
-  # Each validator needs a unique validation_seed for consensus to work.
-  # ECS Fargate doesn't support per-task secret injection within a service,
-  # so we create 3 separate task definitions + services.
+  # Task Definitions — Validators (3 separate, each with unique seed)
+  # VALIDATOR_PUBLIC_KEYS and VALIDATION_SEED both come from Secrets Manager.
   # ===========================================================================
   Validator1TaskDefinition:
     Type: AWS::ECS::TaskDefinition
@@ -172,13 +169,13 @@ Resources:
               Value: !Ref Environment
             - Name: NETWORK_ID
               Value: "10000"
-            - Name: VALIDATOR_PUBLIC_KEYS
-              Value: !Ref ValidatorPublicKeys
             - Name: PEER_IPS
               Value: !Sub "ripple-validator.${Environment}.local 51235,ripple-api.${Environment}.local 51235"
           Secrets:
             - Name: VALIDATION_SEED
               ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ax-ripple-${Environment}/validator-seed"
+            - Name: VALIDATOR_PUBLIC_KEYS
+              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ax-ripple-${Environment}/validator-public-keys"
 
   Validator2TaskDefinition:
     Type: AWS::ECS::TaskDefinition
@@ -216,13 +213,13 @@ Resources:
               Value: !Ref Environment
             - Name: NETWORK_ID
               Value: "10000"
-            - Name: VALIDATOR_PUBLIC_KEYS
-              Value: !Ref ValidatorPublicKeys
             - Name: PEER_IPS
               Value: !Sub "ripple-validator.${Environment}.local 51235,ripple-api.${Environment}.local 51235"
           Secrets:
             - Name: VALIDATION_SEED
               ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ax-ripple-${Environment}/validator-seed-2"
+            - Name: VALIDATOR_PUBLIC_KEYS
+              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ax-ripple-${Environment}/validator-public-keys"
 
   Validator3TaskDefinition:
     Type: AWS::ECS::TaskDefinition
@@ -260,16 +257,17 @@ Resources:
               Value: !Ref Environment
             - Name: NETWORK_ID
               Value: "10000"
-            - Name: VALIDATOR_PUBLIC_KEYS
-              Value: !Ref ValidatorPublicKeys
             - Name: PEER_IPS
               Value: !Sub "ripple-validator.${Environment}.local 51235,ripple-api.${Environment}.local 51235"
           Secrets:
             - Name: VALIDATION_SEED
               ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ax-ripple-${Environment}/validator-seed-3"
+            - Name: VALIDATOR_PUBLIC_KEYS
+              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ax-ripple-${Environment}/validator-public-keys"
 
   # ===========================================================================
   # Task Definition — API Node
+  # VALIDATOR_PUBLIC_KEYS comes from Secrets Manager (same secret, all nodes)
   # ===========================================================================
   ApiNodeTaskDefinition:
     Type: AWS::ECS::TaskDefinition
@@ -311,10 +309,11 @@ Resources:
               Value: !Ref Environment
             - Name: NETWORK_ID
               Value: "10000"
-            - Name: VALIDATOR_PUBLIC_KEYS
-              Value: !Ref ValidatorPublicKeys
             - Name: PEER_IPS
               Value: !Sub "ripple-validator.${Environment}.local 51235,ripple-api.${Environment}.local 51235"
+          Secrets:
+            - Name: VALIDATOR_PUBLIC_KEYS
+              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ax-ripple-${Environment}/validator-public-keys"
 
   # ===========================================================================
   # ECS Services — Validators (one service per validator for unique seeds)
@@ -419,5 +418,4 @@ Outputs:
     Value: !Sub "ripple-api.${Environment}.local"
     Export:
       Name: !Sub "${AWS::StackName}-ApiNodeDiscoveryEndpoint"
-
 

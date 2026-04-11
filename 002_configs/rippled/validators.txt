@@ -1,0 +1,6 @@
+# Private network validators — overwritten at container startup by entrypoint script.
+# Keys are injected from AWS Secrets Manager (ax-ripple-<env>/validator-public-keys).
+# This file exists in the image only to override the mainnet default installed
+# by the rippled apt package. Do NOT add real validator keys here.
+[validators]
+

@@ -86,6 +86,9 @@ ax-ripple-network/
 │
 ├── 003_scripts/                    # Operational scripts
 │   ├── bootstrap-backend.sh        # Create S3/DynamoDB for TF state
+│   ├── create-ecr-repos.sh         # Create ECR repositories (run once before first deploy)
+│   ├── generate-validator-keys.sh  # Generate rippled validator tokens → push to Secrets Manager
+│   ├── update-task-definitions.sh  # Update ECS task defs (secret rotation / emergency redeploy)
 │   ├── validate-infra.sh           # Validate all infrastructure
 │   └── failover-test.sh            # End-to-end failover test
 │
@@ -285,29 +288,44 @@ aws secretsmanager create-secret --name atlantis/github-token \
 aws secretsmanager create-secret --name atlantis/webhook-secret \
   --secret-string "$(openssl rand -hex 32)"
 
-# 1d. Create validator seed secrets for rippled private network (3 validators)
-#     For a real deployment, generate keys with: rippled wallet_propose
-#     The seed (master_seed) goes here; the public key goes into ValidatorPublicKeys tfvar.
-aws secretsmanager create-secret \
-  --name "ax-ripple-dev/validator-seed" \
-  --description "Rippled validator 1 seed for AX Ripple dev private network" \
-  --secret-string "snYOUR_VALIDATOR_1_SEED_HERE"
+# 1d. Generate validator keys + tokens and push to Secrets Manager
+#
+#     Uses the validator-keys tool inside the official xrpllabsofficial/xrpld
+#     Docker image to generate a keypair and token for each of the 3 validators.
+#
+#     What it produces per validator:
+#       - PUBLIC_KEY  (nHXXX) → goes into the [validators] UNL list
+#       - TOKEN       (base64 blob) → rippled reads this as [validator_token]
+#
+#     IMPORTANT: Run this ONCE per environment. Re-running create_token
+#     increments the key sequence; all validator services must be redeployed
+#     simultaneously after any re-run.
+#
+chmod +x 003_scripts/generate-validator-keys.sh
 
-aws secretsmanager create-secret \
-  --name "ax-ripple-dev/validator-seed-2" \
-  --description "Rippled validator 2 seed for AX Ripple dev private network" \
-  --secret-string "snYOUR_VALIDATOR_2_SEED_HERE"
+# Dry run first — generates keys and prints output without touching AWS
+./003_scripts/generate-validator-keys.sh
 
-aws secretsmanager create-secret \
-  --name "ax-ripple-dev/validator-seed-3" \
-  --description "Rippled validator 3 seed for AX Ripple dev private network" \
-  --secret-string "snYOUR_VALIDATOR_3_SEED_HERE"
+# When ready, push tokens + public keys directly to Secrets Manager:
+ENVIRONMENT=dev ./003_scripts/generate-validator-keys.sh --push-secrets
 
-# 1e. Create ECR repositories (managed outside CloudFormation to avoid image conflicts)
+# Output files (keep offline and secure):
+#   /tmp/validator-keys/validator-1.txt  → PUBLIC_KEY + TOKEN for validator 1
+#   /tmp/validator-keys/validator-2.txt  → PUBLIC_KEY + TOKEN for validator 2
+#   /tmp/validator-keys/validator-3.txt  → PUBLIC_KEY + TOKEN for validator 3
+#
+# Secrets created in AWS Secrets Manager:
+#   ax-ripple-dev/validator-seed          → validator 1 token
+#   ax-ripple-dev/validator-seed-2        → validator 2 token
+#   ax-ripple-dev/validator-seed-3        → validator 3 token
+#   ax-ripple-dev/validator-public-keys   → comma-separated nHXXX public keys (UNL)
+
+# 1f. Create ECR repositories (managed outside CloudFormation to avoid image conflicts)
+#     ECR repos must exist BEFORE the first terraform apply — CFN does not manage them.
 chmod +x 003_scripts/create-ecr-repos.sh
 ./003_scripts/create-ecr-repos.sh
 
-# 1f. Bootstrap Terraform state backend (S3 + DynamoDB)
+# 1g. Bootstrap Terraform state backend (S3 + DynamoDB)
 chmod +x 003_scripts/bootstrap-backend.sh
 ./003_scripts/bootstrap-backend.sh
 ```
@@ -334,20 +352,29 @@ After this, Atlantis is live and manages all future changes via PRs.
 ### 4. Validate & Test
 
 ```bash
-# Validate infrastructure
+# Validate all infrastructure is healthy
 chmod +x 003_scripts/validate-infra.sh
 ./003_scripts/validate-infra.sh
 
 # Test WebSocket client
 cd 001_app/client
 cp .env.example .env
-# Update HAPROXY_HOST with HAProxy IP from Terraform outputs
+# Update RIPPLED_WS_URL and RIPPLED_HTTP_URL with the HAProxy IP from Terraform outputs
 npm install && npm start
 
-# Run failover test
+# Run full failover test
 chmod +x 003_scripts/failover-test.sh
 ./003_scripts/failover-test.sh
 ```
+
+> **Note — Secret Rotation / Emergency Redeploy:**
+> If validator secrets are rotated (new tokens generated), run the following to update
+> ECS task definitions with the new Secrets Manager ARNs and force a redeploy:
+> ```bash
+> chmod +x 003_scripts/update-task-definitions.sh
+> ./003_scripts/update-task-definitions.sh dev
+> ```
+> Under normal operation this is **not required** — Atlantis `apply` handles all ECS deployments.
 
 ## 🔧 How It Works
 
@@ -402,25 +429,31 @@ Client → HAProxy :6006 (WS)   → rippled API nodes :6006 (WebSocket)
 ### CI/CD Pipeline
 
 ```
-PR Opened → GitHub Actions CI:
+PR Opened → GitHub Actions CI (runs in parallel):
   ├── MegaLinter, Hadolint, cfn-lint, ShellCheck, Node.js syntax
   ├── Terraform fmt + validate (all 3 modules)
-  └── Docker Build & Push to ECR (tagged with PR commit SHA)
-        ↓ images exist in ECR
-PR Opened → Atlantis (auto-plan, references the ECR images):
+  └── Docker Build & Push to ECR (tagged r-1.0.X — next patch version)
+        ↓ images exist in ECR before Atlantis plans
+
+PR Opened → Atlantis (auto-runs terraform plan):
   ├── atlantis plan -p shared-infra
-  ├── atlantis plan -p ax-ripple-network
+  ├── atlantis plan -p ax-ripple-network    ← references r-1.0.X image already in ECR
   └── atlantis plan -p atlantis
 
-PR Approved → Developer comments:
-  ├── atlantis apply -p shared-infra         (deploy FIRST)
-  ├── atlantis apply -p ax-ripple-network    (after shared-infra)
-  └── atlantis apply -p atlantis             (after shared-infra)
+PR Approved → Developer comments to apply in order:
+  ├── atlantis apply -p shared-infra        ← VPC, ECS cluster (deploy FIRST)
+  ├── atlantis apply -p ax-ripple-network   ← validators, API nodes, HAProxy
+  └── atlantis apply -p atlantis            ← Atlantis service itself
 
 PR Merged → GitHub Actions CI:
-  ├── Promote SHA-tagged images to :latest in ECR
-  └── Create GitHub Release v1.0.X (auto-increment, max X=9)
+  ├── Promote r-1.0.X image to :latest in ECR
+  └── Create Git tag + GitHub Release r-1.0.X (auto-increment X, max 9)
 ```
+
+> **Deployment is owned by Atlantis.** The CI pipeline builds and tags images.
+> `terraform apply` (via Atlantis) is what actually deploys the new image to ECS —
+> by updating the CloudFormation stack with the new image URI.
+> There is no separate "deploy" step in CI.
 
 ## 🧪 Post-Deployment Flows
 
