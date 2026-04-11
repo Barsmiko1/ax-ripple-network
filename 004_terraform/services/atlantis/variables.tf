@@ -60,4 +60,3 @@ variable "atlantis_task_memory" {
   description = "Memory (MB) for Atlantis ECS task"
 }
 
-
