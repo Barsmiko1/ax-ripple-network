@@ -133,9 +133,11 @@ Resources:
             # Re-associate the Elastic IP to this instance on every launch
             # ----------------------------------------------------------------
             INSTANCE_ID=$(curl -sf http://169.254.169.254/latest/meta-data/instance-id)
+            set +e
             EIP_ALLOC=$(aws ec2 describe-addresses --region ${AWS::Region} \
               --query "Addresses[?Tags[?Key=='aws:cloudformation:stack-name'&&Value=='${AWS::StackName}']].AllocationId" \
-              --output text 2>/dev/null || echo "")
+              --output text 2>/dev/null)
+            set -e
             if [ -n "$EIP_ALLOC" ]; then
               aws ec2 associate-address --region ${AWS::Region} \
                 --instance-id "$INSTANCE_ID" \
@@ -146,48 +148,50 @@ Resources:
 
             # ----------------------------------------------------------------
             # Self-register this HAProxy instance in Cloud Map so Prometheus
-            # can resolve haproxy.<env>.local:8404 via DNS without manual steps.
-            # Namespace ID is looked up dynamically — no CFN parameter needed.
+            # can resolve haproxy.<env>.local:8404 via DNS.
+            # Uses set +e / set -e blocks — avoids || which is stripped by
+            # CFN Fn::Base64 + !Sub YAML block scalar processing.
             # ----------------------------------------------------------------
+            set +e
             PRIVATE_IP=$(curl -sf http://169.254.169.254/latest/meta-data/local-ipv4)
             NS_ID=$(aws servicediscovery list-namespaces --region ${AWS::Region} \
               --query "Namespaces[?Name=='${Environment}.local'].Id" \
-              --output text 2>/dev/null || echo "")
-            SVC_ID=$(aws servicediscovery list-services --region ${AWS::Region} \
-              --filters "Name=NAMESPACE_ID,Values=$NS_ID,Condition=EQ" \
-              --query "Services[?Name=='haproxy'].Id" --output text 2>/dev/null || echo "")
-
-            if [ -z "$SVC_ID" ]; then
-              # Create the Cloud Map service for haproxy if it doesn't exist yet
+              --output text 2>/dev/null)
+            SVC_ID=""
+            if [ -n "$NS_ID" ]; then
+              SVC_ID=$(aws servicediscovery list-services --region ${AWS::Region} \
+                --filters "Name=NAMESPACE_ID,Values=$NS_ID,Condition=EQ" \
+                --query "Services[?Name=='haproxy'].Id" --output text 2>/dev/null)
+            fi
+            if [ -z "$SVC_ID" ] && [ -n "$NS_ID" ]; then
+              DNS_CFG="RoutingPolicy=MULTIVALUE,DnsRecords=[{Type=A,TTL=10}]"
               SVC_ID=$(aws servicediscovery create-service \
                 --name haproxy \
                 --namespace-id "$NS_ID" \
-                --dns-config 'RoutingPolicy=MULTIVALUE,DnsRecords=[{Type=A,TTL=10}]' \
-                --health-check-custom-config 'FailureThreshold=1' \
+                --dns-config "$DNS_CFG" \
+                --health-check-custom-config FailureThreshold=1 \
                 --region ${AWS::Region} \
-                --query 'Service.Id' --output text 2>/dev/null || echo "")
+                --query 'Service.Id' --output text 2>/dev/null)
               echo "Created Cloud Map service haproxy: $SVC_ID"
             fi
-
             if [ -n "$SVC_ID" ]; then
-              # Deregister any stale instance (old IP after ASG replacement)
-              OLD_INST=$(aws servicediscovery list-instances \
+              OLD_INSTS=$(aws servicediscovery list-instances \
                 --service-id "$SVC_ID" --region ${AWS::Region} \
-                --query 'Instances[*].Id' --output text 2>/dev/null || echo "")
-              for old_id in $OLD_INST; do
+                --query 'Instances[*].Id' --output text 2>/dev/null)
+              for old_id in $OLD_INSTS; do
                 aws servicediscovery deregister-instance \
                   --service-id "$SVC_ID" --instance-id "$old_id" \
-                  --region ${AWS::Region} 2>/dev/null || true
+                  --region ${AWS::Region} 2>/dev/null
                 echo "Deregistered stale Cloud Map instance: $old_id"
               done
-              # Register this instance
               aws servicediscovery register-instance \
                 --service-id "$SVC_ID" \
                 --instance-id "$INSTANCE_ID" \
                 --attributes "AWS_INSTANCE_IPV4=$PRIVATE_IP,AWS_INSTANCE_PORT=8404" \
-                --region ${AWS::Region}
+                --region ${AWS::Region} 2>/dev/null
               echo "Registered haproxy in Cloud Map: $PRIVATE_IP:8404 (svc=$SVC_ID)"
             fi
+            set -e
 
             cat > /etc/haproxy/haproxy.cfg << 'HAPROXY_CFG'
             global
