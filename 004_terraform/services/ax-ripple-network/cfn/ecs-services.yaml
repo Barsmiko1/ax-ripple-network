@@ -157,11 +157,11 @@ Resources:
               awslogs-region: !Ref "AWS::Region"
               awslogs-stream-prefix: validator-1
           HealthCheck:
-            Command: ["CMD-SHELL", "curl -sf http://localhost:5005/ || exit 1"]
-            Interval: 30
+            Command: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/51235' 2>/dev/null || exit 1"]
+            Interval: 15
             Timeout: 5
-            Retries: 3
-            StartPeriod: 120
+            Retries: 5
+            StartPeriod: 60
           Environment:
             - Name: RIPPLED_ROLE
               Value: validator
@@ -201,11 +201,11 @@ Resources:
               awslogs-region: !Ref "AWS::Region"
               awslogs-stream-prefix: validator-2
           HealthCheck:
-            Command: ["CMD-SHELL", "curl -sf http://localhost:5005/ || exit 1"]
-            Interval: 30
+            Command: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/51235' 2>/dev/null || exit 1"]
+            Interval: 15
             Timeout: 5
-            Retries: 3
-            StartPeriod: 120
+            Retries: 5
+            StartPeriod: 60
           Environment:
             - Name: RIPPLED_ROLE
               Value: validator
@@ -245,11 +245,11 @@ Resources:
               awslogs-region: !Ref "AWS::Region"
               awslogs-stream-prefix: validator-3
           HealthCheck:
-            Command: ["CMD-SHELL", "curl -sf http://localhost:5005/ || exit 1"]
-            Interval: 30
+            Command: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/51235' 2>/dev/null || exit 1"]
+            Interval: 15
             Timeout: 5
-            Retries: 3
-            StartPeriod: 120
+            Retries: 5
+            StartPeriod: 60
           Environment:
             - Name: RIPPLED_ROLE
               Value: validator
@@ -284,7 +284,7 @@ Resources:
           Image: !Ref ApiNodeImage
           Essential: true
           PortMappings:
-            - ContainerPort: 5005
+            - ContainerPort: 51234
               Protocol: tcp
             - ContainerPort: 6006
               Protocol: tcp
@@ -297,11 +297,11 @@ Resources:
               awslogs-region: !Ref "AWS::Region"
               awslogs-stream-prefix: api-node
           HealthCheck:
-            Command: ["CMD-SHELL", "curl -sf http://localhost:5005/ || exit 1"]
-            Interval: 30
+            Command: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/51234' 2>/dev/null || exit 1"]
+            Interval: 15
             Timeout: 5
-            Retries: 3
-            StartPeriod: 120
+            Retries: 5
+            StartPeriod: 60
           Environment:
             - Name: RIPPLED_ROLE
               Value: api
