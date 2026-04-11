@@ -290,8 +290,8 @@ Resources:
       AutoScalingRollingUpdate:
         MinInstancesInService: 1
         MaxBatchSize: 1
-        PauseTime: PT10M
-        WaitOnResourceSignals: true
+        PauseTime: PT5M
+        WaitOnResourceSignals: false
     Properties:
       AutoScalingGroupName: !Sub "ax-ripple-${Environment}-haproxy-asg"
       LaunchTemplate:
