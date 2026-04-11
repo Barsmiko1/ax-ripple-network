@@ -258,11 +258,6 @@ Resources:
               awslogs-group: !Ref PrometheusLogGroup
               awslogs-region: !Ref "AWS::Region"
               awslogs-stream-prefix: prometheus
-          Command:
-            - "--config.file=/etc/prometheus/prometheus.yml"
-            - "--storage.tsdb.path=/prometheus"
-            - "--storage.tsdb.retention.time=7d"
-            - "--web.enable-lifecycle"
 
   # ===========================================================================
   # Task Definition — Grafana
