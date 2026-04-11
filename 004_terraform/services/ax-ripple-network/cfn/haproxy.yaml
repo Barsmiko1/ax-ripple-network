@@ -98,15 +98,17 @@ Resources:
             exec > >(tee /var/log/haproxy-setup.log) 2>&1
 
             # ----------------------------------------------------------------
-            # Install cfn-bootstrap — NOT bundled on Amazon Linux 2023
+            # Install cfn-bootstrap FIRST, before set -e, so the EXIT trap
+            # signal binary is guaranteed to exist even if later steps fail.
+            # AL2023 ships python3 but NOT pip — install it via dnf first.
             # ----------------------------------------------------------------
             dnf install -y python3-pip
             pip3 install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz
-            ln -sf /usr/local/bin/cfn-signal /opt/aws/bin/cfn-signal || true
+            ln -sf /usr/local/bin/cfn-signal /opt/aws/bin/cfn-signal 2>/dev/null || true
 
             # Always signal CloudFormation on exit (success or failure)
             cfn_signal() {
-              /usr/local/bin/cfn-signal -e $1 \
+              /usr/local/bin/cfn-signal -e "$1" \
                 --stack ${AWS::StackName} \
                 --resource HAProxyASG \
                 --region ${AWS::Region}
@@ -115,8 +117,14 @@ Resources:
 
             set -euo pipefail
 
+            # ----------------------------------------------------------------
+            # AL2023 ships curl-minimal which conflicts with the full curl pkg.
+            # Use --allowerasing so dnf can swap curl-minimal -> curl if needed,
+            # or just install haproxy and jq (curl-minimal is sufficient).
+            # ----------------------------------------------------------------
             dnf update -y
-            dnf install -y haproxy curl jq
+            dnf install -y haproxy jq
+            # curl-minimal is already present on AL2023; no need to install curl
             systemctl enable haproxy
 
             cat > /etc/haproxy/haproxy.cfg << 'HAPROXY_CFG'
