@@ -285,15 +285,29 @@ aws secretsmanager create-secret --name atlantis/github-token \
 aws secretsmanager create-secret --name atlantis/webhook-secret \
   --secret-string "$(openssl rand -hex 32)"
 
-# 1d. Create validator seed secret for rippled private network
+# 1d. Create validator seed secrets for rippled private network (3 validators)
 #     For a real deployment, generate keys with: rippled wallet_propose
 #     The seed (master_seed) goes here; the public key goes into ValidatorPublicKeys tfvar.
 aws secretsmanager create-secret \
   --name "ax-ripple-dev/validator-seed" \
-  --description "Rippled validator seed for AX Ripple dev private network" \
-  --secret-string "snYOUR_VALIDATOR_MASTER_SEED_HERE"
+  --description "Rippled validator 1 seed for AX Ripple dev private network" \
+  --secret-string "snYOUR_VALIDATOR_1_SEED_HERE"
 
-# 1e. Bootstrap Terraform state backend (S3 + DynamoDB)
+aws secretsmanager create-secret \
+  --name "ax-ripple-dev/validator-seed-2" \
+  --description "Rippled validator 2 seed for AX Ripple dev private network" \
+  --secret-string "snYOUR_VALIDATOR_2_SEED_HERE"
+
+aws secretsmanager create-secret \
+  --name "ax-ripple-dev/validator-seed-3" \
+  --description "Rippled validator 3 seed for AX Ripple dev private network" \
+  --secret-string "snYOUR_VALIDATOR_3_SEED_HERE"
+
+# 1e. Create ECR repositories (managed outside CloudFormation to avoid image conflicts)
+chmod +x 003_scripts/create-ecr-repos.sh
+./003_scripts/create-ecr-repos.sh
+
+# 1f. Bootstrap Terraform state backend (S3 + DynamoDB)
 chmod +x 003_scripts/bootstrap-backend.sh
 ./003_scripts/bootstrap-backend.sh
 ```

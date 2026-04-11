@@ -13,16 +13,6 @@ output "api_node_discovery_endpoint" {
   value       = aws_cloudformation_stack.ecs_services.outputs["ApiNodeDiscoveryEndpoint"]
 }
 
-# --- ECR ---
-output "validator_ecr_repository_uri" {
-  description = "ECR repository URI for validator Docker images"
-  value       = aws_cloudformation_stack.ecs_services.outputs["ValidatorECRRepositoryUri"]
-}
-
-output "api_node_ecr_repository_uri" {
-  description = "ECR repository URI for API node Docker images"
-  value       = aws_cloudformation_stack.ecs_services.outputs["ApiNodeECRRepositoryUri"]
-}
 
 # --- HAProxy ---
 output "haproxy_public_ip" {

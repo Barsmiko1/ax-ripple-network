@@ -51,49 +51,11 @@ Parameters:
 
 Resources:
   # ===========================================================================
-  # ECR Repositories
+  # NOTE: ECR Repositories are managed OUTSIDE CloudFormation
+  # They are created by the bootstrap workflow (003_scripts/create-ecr-repos.sh)
+  # or manually via AWS CLI. This prevents delete/recreate conflicts when
+  # images already exist in the repos.
   # ===========================================================================
-  ValidatorECRRepository:
-    Type: AWS::ECR::Repository
-    Properties:
-      RepositoryName: !Sub "ax-ripple-${Environment}/validator"
-      ImageScanningConfiguration:
-        ScanOnPush: true
-      ImageTagMutability: MUTABLE
-      LifecyclePolicy:
-        LifecyclePolicyText: |
-          {
-            "rules": [{
-              "rulePriority": 1,
-              "description": "Keep last 10 images",
-              "selection": { "tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 10 },
-              "action": { "type": "expire" }
-            }]
-          }
-      Tags:
-        - Key: Role
-          Value: validator
-
-  ApiNodeECRRepository:
-    Type: AWS::ECR::Repository
-    Properties:
-      RepositoryName: !Sub "ax-ripple-${Environment}/api-node"
-      ImageScanningConfiguration:
-        ScanOnPush: true
-      ImageTagMutability: MUTABLE
-      LifecyclePolicy:
-        LifecyclePolicyText: |
-          {
-            "rules": [{
-              "rulePriority": 1,
-              "description": "Keep last 10 images",
-              "selection": { "tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 10 },
-              "action": { "type": "expire" }
-            }]
-          }
-      Tags:
-        - Key: Role
-          Value: api-node
 
   # ===========================================================================
   # CloudWatch Log Groups
@@ -458,15 +420,4 @@ Outputs:
     Export:
       Name: !Sub "${AWS::StackName}-ApiNodeDiscoveryEndpoint"
 
-  ValidatorECRRepositoryUri:
-    Description: ECR repository URI for validator images
-    Value: !GetAtt ValidatorECRRepository.RepositoryUri
-    Export:
-      Name: !Sub "${AWS::StackName}-ValidatorECRRepositoryUri"
-
-  ApiNodeECRRepositoryUri:
-    Description: ECR repository URI for API node images
-    Value: !GetAtt ApiNodeECRRepository.RepositoryUri
-    Export:
-      Name: !Sub "${AWS::StackName}-ApiNodeECRRepositoryUri"
 
