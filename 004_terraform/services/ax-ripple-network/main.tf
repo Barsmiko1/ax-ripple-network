@@ -147,11 +147,11 @@ resource "aws_cloudformation_stack" "observability" {
   template_body = file("${path.module}/cfn/observability.yaml")
 
   parameters = {
-    Environment              = var.environment
-    VpcId                    = local.shared.vpc_id
-    PrivateSubnetIds         = local.shared.private_subnet_ids
-    PrometheusSGId           = local.shared.prometheus_sg_id
-    ECSClusterArn            = local.shared.ecs_cluster_arn
+    Environment                 = var.environment
+    VpcId                       = local.shared.vpc_id
+    PrivateSubnetIds            = local.shared.private_subnet_ids
+    PrometheusSGId              = local.shared.prometheus_sg_id
+    ECSClusterArn               = local.shared.ecs_cluster_arn
     ApiNodeDiscoveryEndpoint    = aws_cloudformation_stack.ecs_services.outputs["ApiNodeDiscoveryEndpoint"]
     HAProxyStatsEndpoint        = aws_cloudformation_stack.haproxy.outputs["HAProxyStatsEndpoint"]
     ServiceDiscoveryNamespaceId = local.shared.service_discovery_namespace_id

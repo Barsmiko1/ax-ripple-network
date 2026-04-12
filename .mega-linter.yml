@@ -22,4 +22,4 @@ FILEIO_REPORTER: false
 PRINT_ALL_FILES: false
 TERRAFORM_TFLINT_CONFIG_FILE: .tflint.hcl
 JAVASCRIPT_ES_CONFIG_FILE: .eslintrc.json
-FILTER_REGEX_EXCLUDE: "(node_modules|\.terraform|\.git)"
+FILTER_REGEX_EXCLUDE: '(node_modules|\.terraform|\.git)'

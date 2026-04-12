@@ -41,7 +41,6 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-CYAN='\033[0;36m'
 MAGENTA='\033[0;35m'
 NC='\033[0m'
 BOLD='\033[1m'
@@ -55,6 +54,7 @@ phase() { echo ""; echo -e "${BOLD}${BLUE}══ Phase $1: $2 ══${NC}"; echo
 
 # Cleanup
 CLIENT_PID=""
+# shellcheck disable=SC2329
 cleanup() {
   if [ -n "${CLIENT_PID}" ] && kill -0 "${CLIENT_PID}" 2>/dev/null; then
     kill "${CLIENT_PID}" 2>/dev/null || true
@@ -165,7 +165,7 @@ if [ ! -d "node_modules" ]; then
   npm install --silent 2>/dev/null
 fi
 
-> "${LOG_FILE}"
+: > "${LOG_FILE}"
 HAPROXY_HOST="${HAPROXY_IP}" \
   RIPPLED_WS_URL="${WS_URL}" \
   RIPPLED_HTTP_URL="${HTTP_URL}" \
@@ -206,7 +206,7 @@ echo "  HAProxy stats captured (pre-failover)"
 
 # Record timestamp
 FAILOVER_START=$(date +%s)
-echo "  Failover start timestamp: $(date -r ${FAILOVER_START} '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -d @${FAILOVER_START} '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "${FAILOVER_START}")"
+echo "  Failover start timestamp: $(date -r "${FAILOVER_START}" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -d "@${FAILOVER_START}" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "${FAILOVER_START}")"
 
 # =============================================================================
 phase 4 "Inject Failure — Stop One API Node"
