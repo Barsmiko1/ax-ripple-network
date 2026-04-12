@@ -36,12 +36,19 @@ Parameters:
   GitHubUser:
     Type: String
     Description: GitHub username or bot account for Atlantis to comment on PRs
+  AtlantisURL:
+    Type: String
+    Description: Public URL for Atlantis (used by GitHub webhooks)
+    Default: ""
   TaskCpu:
     Type: String
     Default: "512"
   TaskMemory:
     Type: String
     Default: "1024"
+
+Conditions:
+  HasAtlantisURL: !Not [!Equals [!Ref AtlantisURL, ""]]
 
 Resources:
   # ===========================================================================
@@ -165,7 +172,10 @@ Resources:
             - Name: ATLANTIS_REPO_ALLOWLIST
               Value: !Ref AtlantisRepoAllowlist
             - Name: ATLANTIS_ATLANTIS_URL
-              Value: !Sub "http://atlantis.${Environment}.local:4141"
+              Value: !If
+                - HasAtlantisURL
+                - !Ref AtlantisURL
+                - !Sub "http://atlantis.${Environment}.local:4141"
             - Name: ATLANTIS_REPO_CONFIG_JSON
               Value: '{"repos":[{"id":"/.*/","allowed_overrides":["workflow","apply_requirements"],"allow_custom_workflows":true}]}'
           Secrets:

@@ -270,6 +270,11 @@ Resources:
           ToPort: 9090
           CidrIp: "0.0.0.0/0"
           Description: Prometheus UI (proxied via HAProxy)
+        - IpProtocol: tcp
+          FromPort: 4141
+          ToPort: 4141
+          CidrIp: "0.0.0.0/0"
+          Description: Atlantis UI + webhook (proxied via HAProxy)
       SecurityGroupEgress:
         - IpProtocol: "-1"
           CidrIp: "0.0.0.0/0"
@@ -313,8 +318,8 @@ Resources:
         - IpProtocol: tcp
           FromPort: 4141
           ToPort: 4141
-          CidrIp: "0.0.0.0/0"
-          Description: Atlantis web UI + webhook endpoint
+          CidrIp: !Ref VpcCidr
+          Description: Atlantis web UI + webhook (via HAProxy)
       SecurityGroupEgress:
         - IpProtocol: "-1"
           CidrIp: "0.0.0.0/0"

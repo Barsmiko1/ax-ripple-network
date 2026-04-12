@@ -276,6 +276,16 @@ Resources:
                 balance roundrobin
                 server-template prometheus- 1-2 prometheus.${Environment}.local:9090 check resolvers dns init-addr none inter 10s fall 3 rise 2
 
+            frontend atlantis_front
+                bind *:4141
+                default_backend atlantis_backend
+
+            backend atlantis_backend
+                balance roundrobin
+                option httpchk GET /healthz
+                http-check expect status 200
+                server-template atlantis- 1-2 atlantis.${Environment}.local:4141 check resolvers dns init-addr none inter 10s fall 3 rise 2
+
             resolvers dns
                 nameserver vpc 169.254.169.253:53
                 resolve_retries 3
