@@ -1,6 +1,6 @@
+---
 # cfn-lint configuration
 # https://github.com/aws-cloudformation/cfn-lint
 ignore_checks:
   - W2001  # Unused parameters — some are passed by Terraform for future use
   - W2506  # Parameter type for AMI IDs — we resolve via SSM in Terraform
-

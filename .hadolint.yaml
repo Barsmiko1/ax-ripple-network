@@ -1,3 +1,4 @@
+---
 # Hadolint configuration
 # https://github.com/hadolint/hadolint#configure
 ignored:
@@ -7,4 +8,3 @@ ignored:
   # DL4006: Set SHELL -o pipefail before RUN with pipe
   # Our pipe commands are safe (wget | gpg) and we check exit status
   - DL4006
-

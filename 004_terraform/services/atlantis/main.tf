@@ -5,10 +5,8 @@
 # =============================================================================
 
 # =============================================================================
-# Data Sources — derive account ID and secret ARNs at plan time
+# Data Sources — derive secret ARNs at plan time
 # =============================================================================
-data "aws_caller_identity" "current" {}
-data "aws_region" "current" {}
 
 data "aws_secretsmanager_secret" "github_token" {
   name = var.github_token_secret_name
