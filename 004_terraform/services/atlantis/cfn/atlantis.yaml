@@ -56,6 +56,8 @@ Resources:
   # ===========================================================================
   AtlantisLogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       LogGroupName: !Sub "/ecs/ax-ripple-${Environment}/atlantis"
       RetentionInDays: 30
@@ -103,20 +105,20 @@ Resources:
                   - s3:ListBucket
                   - s3:DeleteObject
                 Resource:
-                  - "arn:aws:s3:::ax-ripple-network-terraform-state"
-                  - "arn:aws:s3:::ax-ripple-network-terraform-state/*"
+                  - !Sub "arn:${AWS::Partition}:s3:::ax-ripple-network-terraform-state"
+                  - !Sub "arn:${AWS::Partition}:s3:::ax-ripple-network-terraform-state/*"
               # DynamoDB state locking
               - Effect: Allow
                 Action:
                   - dynamodb:GetItem
                   - dynamodb:PutItem
                   - dynamodb:DeleteItem
-                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/ax-ripple-network-terraform-locks"
+                Resource: !Sub "arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/ax-ripple-network-terraform-locks"
               # CloudFormation (Terraform provisions CFN stacks)
               - Effect: Allow
                 Action:
                   - cloudformation:*
-                Resource: !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/ax-ripple-*"
+                Resource: !Sub "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/ax-ripple-*"
               # EC2, ECS, IAM, ECR, etc. for CFN stack resources
               - Effect: Allow
                 Action:
