@@ -89,7 +89,29 @@ if [ -n "${NETWORK_ID:-}" ]; then
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. Start rippled
+# 5. Wait for peer DNS to be populated before starting rippled
+#    Prevents ledger divergence from validators starting before peers register
+# ─────────────────────────────────────────────────────────────────────────────
+if [ -n "${PEER_IPS:-}" ]; then
+  # Extract the first DNS name from PEER_IPS (format: "hostname port,hostname2 port")
+  PEER_DNS=$(echo "${PEER_IPS}" | cut -d',' -f1 | awk '{print $1}')
+  EXPECTED_PEERS="${EXPECTED_PEER_COUNT:-3}"  # includes self
+  echo "[entrypoint] Waiting for peer DNS (${PEER_DNS}) to return ${EXPECTED_PEERS} records..."
+
+  for attempt in $(seq 1 30); do
+    RESOLVED=$(getent ahosts "${PEER_DNS}" 2>/dev/null | awk '{print $1}' | sort -u | wc -l || echo "0")
+    RESOLVED=$(echo "${RESOLVED}" | tr -d ' ')
+    if [ "${RESOLVED}" -ge "${EXPECTED_PEERS}" ] 2>/dev/null; then
+      echo "[entrypoint] ✅ DNS ready: ${RESOLVED} peers found"
+      break
+    fi
+    echo "[entrypoint]   [${attempt}/30] ${RESOLVED}/${EXPECTED_PEERS} peers — retrying in 5s..."
+    sleep 5
+  done
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. Start rippled
 # ─────────────────────────────────────────────────────────────────────────────
 echo "[entrypoint] Configuration complete. Starting rippled..."
 echo "[entrypoint]   Config: ${CONFIG_FILE}"

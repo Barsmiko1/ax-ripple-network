@@ -73,7 +73,28 @@ if [ -n "${NETWORK_ID:-}" ]; then
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. Start rippled
+# 4. Wait for validator DNS to be populated before starting rippled
+#    Ensures the API node can connect to validators immediately
+# ─────────────────────────────────────────────────────────────────────────────
+if [ -n "${PEER_IPS:-}" ]; then
+  PEER_DNS=$(echo "${PEER_IPS}" | cut -d',' -f1 | awk '{print $1}')
+  EXPECTED_PEERS="${EXPECTED_PEER_COUNT:-3}"
+  echo "[entrypoint] Waiting for peer DNS (${PEER_DNS}) to return ${EXPECTED_PEERS} records..."
+
+  for attempt in $(seq 1 30); do
+    RESOLVED=$(getent ahosts "${PEER_DNS}" 2>/dev/null | awk '{print $1}' | sort -u | wc -l || echo "0")
+    RESOLVED=$(echo "${RESOLVED}" | tr -d ' ')
+    if [ "${RESOLVED}" -ge "${EXPECTED_PEERS}" ] 2>/dev/null; then
+      echo "[entrypoint] ✅ DNS ready: ${RESOLVED} peers found"
+      break
+    fi
+    echo "[entrypoint]   [${attempt}/30] ${RESOLVED}/${EXPECTED_PEERS} peers — retrying in 5s..."
+    sleep 5
+  done
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. Start rippled
 # ─────────────────────────────────────────────────────────────────────────────
 echo "[entrypoint] Configuration complete. Starting rippled..."
 echo "[entrypoint]   Config: ${CONFIG_FILE}"
