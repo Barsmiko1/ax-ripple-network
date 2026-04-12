@@ -375,4 +375,3 @@ Outputs:
     Value: !Ref AtlantisSG
     Export:
       Name: !Sub "${AWS::StackName}-AtlantisSGId"
-

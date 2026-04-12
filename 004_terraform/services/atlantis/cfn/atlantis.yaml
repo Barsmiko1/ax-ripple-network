@@ -134,6 +134,7 @@ Resources:
                   - secretsmanager:GetSecretValue
                   - secretsmanager:DescribeSecret
                   - secretsmanager:ListSecrets
+                  - secretsmanager:GetResourcePolicy
                 Resource: "*"
 
   # ===========================================================================

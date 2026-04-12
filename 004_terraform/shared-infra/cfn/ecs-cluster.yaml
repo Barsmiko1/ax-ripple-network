@@ -110,4 +110,3 @@ Outputs:
     Value: !Sub "${Environment}.local"
     Export:
       Name: !Sub "${AWS::StackName}-ServiceDiscoveryNamespaceName"
-
