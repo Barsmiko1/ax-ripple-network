@@ -71,11 +71,18 @@ jobs:
   # ===========================================================================
   # Docker Build & Push to ECR — runs on pull_request
   # Tag format: r-1.0.X (same tag used for Docker image, Git tag, and release)
+  # Only runs after ALL lint jobs pass.
   # ===========================================================================
   docker-build-push:
     name: Docker Build & Push to ECR
     if: github.event_name == 'pull_request'
-    needs: docker-lint
+    needs:
+      - mega-linter
+      - docker-lint
+      - terraform-validate
+      - cfn-lint
+      - client-validate
+      - shellcheck
     runs-on: ubuntu-latest
     environment: dev
     outputs:
