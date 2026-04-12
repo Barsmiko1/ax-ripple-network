@@ -31,9 +31,22 @@ data "terraform_remote_state" "shared" {
   }
 }
 
+# AX Ripple Network service state — for HAProxy public IP
+data "terraform_remote_state" "ax_ripple" {
+  backend = "s3"
+
+  config = {
+    bucket = "ax-ripple-network-terraform-state"
+    key    = "services/ax-ripple-network/terraform.tfstate"
+    region = var.aws_region
+  }
+}
+
 locals {
   shared         = data.terraform_remote_state.shared.outputs
   repo_allowlist = "github.com/${var.github_org}/ax-ripple-network"
+  haproxy_ip     = try(data.terraform_remote_state.ax_ripple.outputs.haproxy_public_ip, "")
+  atlantis_url   = local.haproxy_ip != "" ? "http://${local.haproxy_ip}:4141" : ""
 }
 
 # =============================================================================
@@ -56,6 +69,7 @@ resource "aws_cloudformation_stack" "atlantis" {
     GitHubWebhookSecretArn      = data.aws_secretsmanager_secret.github_webhook.arn
     AtlantisRepoAllowlist       = local.repo_allowlist
     GitHubUser                  = var.github_user
+    AtlantisURL                 = local.atlantis_url
     TaskCpu                     = var.atlantis_task_cpu
     TaskMemory                  = var.atlantis_task_memory
   }

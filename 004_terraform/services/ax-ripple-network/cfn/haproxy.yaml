@@ -28,9 +28,6 @@ Parameters:
       Amazon Linux 2023 AMI ID — resolved by Terraform via SSM parameter
       /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64
       so CloudFormation does not need ssm:GetParameters.
-  ServiceDiscoveryNamespaceId:
-    Type: String
-    Description: Cloud Map namespace ID (from shared-infra) used for self-registration
 
 Conditions:
   HasKeyPair: !Not [!Equals [!Ref KeyPairName, ""]]
@@ -65,8 +62,6 @@ Resources:
               - Effect: Allow
                 Action:
                   - servicediscovery:DiscoverInstances
-                  # Self-register into Cloud Map on every boot so Prometheus
-                  # can resolve haproxy.<env>.local without manual steps
                   - servicediscovery:RegisterInstance
                   - servicediscovery:DeregisterInstance
                   - servicediscovery:ListServices
@@ -126,21 +121,27 @@ Resources:
             }
             trap 'cfn_signal $?' EXIT
 
-            set -euo pipefail
+            set -eo pipefail
 
             # ----------------------------------------------------------------
             # AL2023: curl-minimal pre-installed, skip dnf update
             # ----------------------------------------------------------------
-            dnf install -y haproxy jq
+            dnf install -y haproxy
             systemctl enable haproxy
 
             # ----------------------------------------------------------------
             # Re-associate the Elastic IP to this instance on every launch
+            # IMDSv2 required — get token first
             # ----------------------------------------------------------------
-            INSTANCE_ID=$(curl -sf http://169.254.169.254/latest/meta-data/instance-id)
+            TOKEN=$(curl -sf -X PUT "http://169.254.169.254/latest/api/token" \
+              -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
+            INSTANCE_ID=$(curl -sf -H "X-aws-ec2-metadata-token: $TOKEN" \
+              http://169.254.169.254/latest/meta-data/instance-id)
+            set +e
             EIP_ALLOC=$(aws ec2 describe-addresses --region ${AWS::Region} \
               --query "Addresses[?Tags[?Key=='aws:cloudformation:stack-name'&&Value=='${AWS::StackName}']].AllocationId" \
-              --output text 2>/dev/null || echo "")
+              --output text 2>/dev/null)
+            set -e
             if [ -n "$EIP_ALLOC" ]; then
               aws ec2 associate-address --region ${AWS::Region} \
                 --instance-id "$INSTANCE_ID" \
@@ -151,46 +152,59 @@ Resources:
 
             # ----------------------------------------------------------------
             # Self-register this HAProxy instance in Cloud Map so Prometheus
-            # can resolve haproxy.<env>.local:8404 via DNS without manual steps.
-            # Idempotent: deregisters any stale instance first, then registers.
+            # can resolve haproxy.<env>.local:8404 via DNS.
+            # Uses set +e / set -e blocks — avoids || which is stripped by
+            # CFN Fn::Base64 + !Sub YAML block scalar processing.
             # ----------------------------------------------------------------
-            PRIVATE_IP=$(curl -sf http://169.254.169.254/latest/meta-data/local-ipv4)
-            NS_ID="${ServiceDiscoveryNamespaceId}"
-            SVC_ID=$(aws servicediscovery list-services --region ${AWS::Region} \
-              --filters "Name=NAMESPACE_ID,Values=$NS_ID,Condition=EQ" \
-              --query "Services[?Name=='haproxy'].Id" --output text 2>/dev/null || echo "")
-
-            if [ -z "$SVC_ID" ]; then
-              # Create the Cloud Map service for haproxy if it doesn't exist yet
+            set +e
+            PRIVATE_IP=$(curl -sf -H "X-aws-ec2-metadata-token: $TOKEN" \
+              http://169.254.169.254/latest/meta-data/local-ipv4)
+            NS_ID=$(aws servicediscovery list-namespaces --region ${AWS::Region} \
+              --query "Namespaces[?Name=='${Environment}.local'].Id" \
+              --output text 2>/dev/null)
+            SVC_ID=""
+            if [ -n "$NS_ID" ]; then
+              SVC_ID=$(aws servicediscovery list-services --region ${AWS::Region} \
+                --filters "Name=NAMESPACE_ID,Values=$NS_ID,Condition=EQ" \
+                --query "Services[?Name=='haproxy'].Id" --output text 2>/dev/null)
+            fi
+            if [ -z "$SVC_ID" ] && [ -n "$NS_ID" ]; then
+              DNS_CFG="RoutingPolicy=MULTIVALUE,DnsRecords=[{Type=A,TTL=10}]"
               SVC_ID=$(aws servicediscovery create-service \
                 --name haproxy \
                 --namespace-id "$NS_ID" \
-                --dns-config 'RoutingPolicy=MULTIVALUE,DnsRecords=[{Type=A,TTL=10}]' \
-                --health-check-custom-config 'FailureThreshold=1' \
+                --dns-config "$DNS_CFG" \
+                --health-check-custom-config FailureThreshold=1 \
                 --region ${AWS::Region} \
-                --query 'Service.Id' --output text 2>/dev/null || echo "")
+                --query 'Service.Id' --output text 2>/dev/null)
               echo "Created Cloud Map service haproxy: $SVC_ID"
             fi
-
             if [ -n "$SVC_ID" ]; then
-              # Deregister any stale instance (old IP after ASG replacement)
-              OLD_INST=$(aws servicediscovery list-instances \
+              OLD_INSTS=$(aws servicediscovery list-instances \
                 --service-id "$SVC_ID" --region ${AWS::Region} \
-                --query 'Instances[*].Id' --output text 2>/dev/null || echo "")
-              for old_id in $OLD_INST; do
-                aws servicediscovery deregister-instance \
+                --query 'Instances[*].Id' --output text 2>/dev/null)
+              for old_id in $OLD_INSTS; do
+                OP_ID=$(aws servicediscovery deregister-instance \
                   --service-id "$SVC_ID" --instance-id "$old_id" \
-                  --region ${AWS::Region} 2>/dev/null || true
-                echo "Deregistered stale Cloud Map instance: $old_id"
+                  --region ${AWS::Region} --query 'OperationId' --output text 2>/dev/null)
+                echo "Deregistered stale Cloud Map instance: $old_id (op=$OP_ID)"
+                # Wait for deregister to complete before registering
+                for _w in $(seq 1 30); do
+                  OP_STATUS=$(aws servicediscovery get-operation \
+                    --operation-id "$OP_ID" --region ${AWS::Region} \
+                    --query 'Operation.Status' --output text 2>/dev/null)
+                  if [ "$OP_STATUS" = "SUCCESS" ] || [ "$OP_STATUS" = "FAIL" ]; then break; fi
+                  sleep 2
+                done
               done
-              # Register this instance
               aws servicediscovery register-instance \
                 --service-id "$SVC_ID" \
                 --instance-id "$INSTANCE_ID" \
                 --attributes "AWS_INSTANCE_IPV4=$PRIVATE_IP,AWS_INSTANCE_PORT=8404" \
-                --region ${AWS::Region}
+                --region ${AWS::Region} 2>/dev/null
               echo "Registered haproxy in Cloud Map: $PRIVATE_IP:8404 (svc=$SVC_ID)"
             fi
+            set -e
 
             cat > /etc/haproxy/haproxy.cfg << 'HAPROXY_CFG'
             global
@@ -244,7 +258,7 @@ Resources:
                 option httpchk
                 http-check send meth POST uri / ver HTTP/1.1 hdr Content-Type application/json hdr Content-Length 41 body "{\"method\":\"server_info\",\"params\":[{}]}"
                 http-check expect status 200
-                server-template api- 1-10 ${ApiNodeDiscoveryEndpoint}:51234 check resolvers dns init-addr none inter 5s fall 3 rise 2
+                server-template api- 2 ${ApiNodeDiscoveryEndpoint}:51234 check resolvers dns init-addr none inter 5s fall 3 rise 2
 
             backend rippled_ws
                 balance roundrobin
@@ -252,7 +266,7 @@ Resources:
                 tcp-check connect port 6006
                 stick-table type ip size 100k expire 30m
                 stick on src
-                server-template api- 1-10 ${ApiNodeDiscoveryEndpoint}:6006 check resolvers dns init-addr none inter 5s fall 3 rise 2
+                server-template api- 2 ${ApiNodeDiscoveryEndpoint}:6006 check resolvers dns init-addr none inter 5s fall 3 rise 2
 
             backend grafana_backend
                 balance roundrobin
@@ -261,6 +275,16 @@ Resources:
             backend prometheus_backend
                 balance roundrobin
                 server-template prometheus- 1-2 prometheus.${Environment}.local:9090 check resolvers dns init-addr none inter 10s fall 3 rise 2
+
+            frontend atlantis_front
+                bind *:4141
+                default_backend atlantis_backend
+
+            backend atlantis_backend
+                balance roundrobin
+                option httpchk GET /healthz
+                http-check expect status 200
+                server-template atlantis- 1-2 atlantis.${Environment}.local:4141 check resolvers dns init-addr none inter 10s fall 3 rise 2
 
             resolvers dns
                 nameserver vpc 169.254.169.253:53
@@ -289,8 +313,8 @@ Resources:
       AutoScalingRollingUpdate:
         MinInstancesInService: 1
         MaxBatchSize: 1
-        PauseTime: PT10M
-        WaitOnResourceSignals: true
+        PauseTime: PT5M
+        WaitOnResourceSignals: false
     Properties:
       AutoScalingGroupName: !Sub "ax-ripple-${Environment}-haproxy-asg"
       LaunchTemplate:

@@ -189,6 +189,8 @@ Resources:
   # ===========================================================================
   RippledPeerSG:
     Type: AWS::EC2::SecurityGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       GroupDescription: Rippled peer-to-peer traffic (port 51235)
       VpcId: !Ref VPC
@@ -207,6 +209,8 @@ Resources:
 
   RippledAPISG:
     Type: AWS::EC2::SecurityGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       GroupDescription: Rippled API traffic (HTTP 51234, WS 6006)
       VpcId: !Ref VPC
@@ -215,12 +219,12 @@ Resources:
           FromPort: 51234
           ToPort: 51234
           CidrIp: !Ref VpcCidr
-          Description: Rippled public JSON-RPC (HAProxy backend)
+          Description: Rippled JSON-RPC (internal via HAProxy)
         - IpProtocol: tcp
           FromPort: 6006
           ToPort: 6006
           CidrIp: !Ref VpcCidr
-          Description: Rippled WebSocket (HAProxy backend)
+          Description: Rippled WebSocket (internal via HAProxy)
         - IpProtocol: tcp
           FromPort: 5005
           ToPort: 5005
@@ -235,6 +239,8 @@ Resources:
 
   HAProxySG:
     Type: AWS::EC2::SecurityGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       GroupDescription: HAProxy public-facing traffic
       VpcId: !Ref VPC
@@ -264,6 +270,11 @@ Resources:
           ToPort: 9090
           CidrIp: "0.0.0.0/0"
           Description: Prometheus UI (proxied via HAProxy)
+        - IpProtocol: tcp
+          FromPort: 4141
+          ToPort: 4141
+          CidrIp: "0.0.0.0/0"
+          Description: Atlantis UI + webhook (proxied via HAProxy)
       SecurityGroupEgress:
         - IpProtocol: "-1"
           CidrIp: "0.0.0.0/0"
@@ -273,6 +284,8 @@ Resources:
 
   PrometheusSG:
     Type: AWS::EC2::SecurityGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       GroupDescription: Prometheus and Grafana observability traffic
       VpcId: !Ref VPC
@@ -296,6 +309,8 @@ Resources:
 
   AtlantisSG:
     Type: AWS::EC2::SecurityGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       GroupDescription: Atlantis server traffic
       VpcId: !Ref VPC
@@ -303,8 +318,8 @@ Resources:
         - IpProtocol: tcp
           FromPort: 4141
           ToPort: 4141
-          CidrIp: "0.0.0.0/0"
-          Description: Atlantis web UI + webhook endpoint
+          CidrIp: !Ref VpcCidr
+          Description: Atlantis web UI + webhook (via HAProxy)
       SecurityGroupEgress:
         - IpProtocol: "-1"
           CidrIp: "0.0.0.0/0"
@@ -360,5 +375,4 @@ Outputs:
     Value: !Ref AtlantisSG
     Export:
       Name: !Sub "${AWS::StackName}-AtlantisSGId"
-
 
