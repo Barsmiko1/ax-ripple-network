@@ -54,7 +54,7 @@ phase() { echo ""; echo -e "${BOLD}${BLUE}══ Phase $1: $2 ══${NC}"; echo
 
 # Cleanup
 CLIENT_PID=""
-# shellcheck disable=SC2329
+# shellcheck disable=SC2329,SC2317
 cleanup() {
   if [ -n "${CLIENT_PID}" ] && kill -0 "${CLIENT_PID}" 2>/dev/null; then
     kill "${CLIENT_PID}" 2>/dev/null || true
