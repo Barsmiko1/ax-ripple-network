@@ -183,6 +183,8 @@ Resources:
                 - !Sub "http://atlantis.${Environment}.local:4141"
             - Name: ATLANTIS_REPO_CONFIG_JSON
               Value: '{"repos":[{"id":"/.*/","allowed_overrides":["workflow","apply_requirements"],"allow_custom_workflows":true}]}'
+            - Name: TF_PLUGIN_CACHE_DIR
+              Value: ""
           Secrets:
             - Name: ATLANTIS_GH_TOKEN
               ValueFrom: !Ref GitHubTokenSecretArn
