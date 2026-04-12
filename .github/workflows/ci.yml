@@ -2,14 +2,15 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [master]
     paths:
       - "004_terraform/**"
       - "001_app/**"
       - "002_configs/**"
+      - "003_scripts/**"
       - ".github/workflows/ci.yml"
   push:
-    branches: [main]
+    branches: [master]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -253,7 +254,7 @@ jobs:
   # ===========================================================================
   promote-and-release:
     name: Promote Images & Create Release
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     environment: dev
     steps:
@@ -370,7 +371,7 @@ jobs:
   # ===========================================================================
   post-deploy:
     name: Post-Deploy Configuration
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     needs: promote-and-release
     runs-on: ubuntu-latest
     environment: dev
@@ -440,5 +441,7 @@ jobs:
           echo "| Grafana Dashboard Provisioned | ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| **Grafana URL** | http://${{ steps.tf-ip.outputs.haproxy_ip }}:3000/d/ax-ripple-network |" >> $GITHUB_STEP_SUMMARY
           echo "| **Prometheus URL** | http://${{ steps.tf-ip.outputs.haproxy_ip }}:9090 |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Atlantis URL** | http://${{ steps.tf-ip.outputs.haproxy_ip }}:4141 |" >> $GITHUB_STEP_SUMMARY
+          echo "| **HAProxy Stats** | http://${{ steps.tf-ip.outputs.haproxy_ip }}:8404/stats |" >> $GITHUB_STEP_SUMMARY
 
 
