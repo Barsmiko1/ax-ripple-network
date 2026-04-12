@@ -130,6 +130,8 @@ Resources:
                   - autoscaling:*
                   - ssm:GetParameter*
                   - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:ListSecrets
                 Resource: "*"
 
   # ===========================================================================
