@@ -1,0 +1,10 @@
+---
+# Hadolint configuration
+# https://github.com/hadolint/hadolint#configure
+ignored:
+  # DL3008: Pin versions in apt-get install
+  # We use the Ripple apt repo's latest stable; pinning defeats the purpose
+  - DL3008
+  # DL4006: Set SHELL -o pipefail before RUN with pipe
+  # Our pipe commands are safe (wget | gpg) and we check exit status
+  - DL4006

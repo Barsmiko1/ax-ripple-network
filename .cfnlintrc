@@ -1,0 +1,8 @@
+---
+# cfn-lint configuration
+# https://github.com/aws-cloudformation/cfn-lint
+ignore_checks:
+  - W2001  # Unused parameters — some are passed by Terraform for future use
+  - W2506  # Parameter type for AMI IDs — we resolve via SSM in Terraform
+  - I3011  # DeletionPolicy not needed on ephemeral/non-stateful resources
+  - I3042  # Partition in ARNs — we use ${AWS::Partition} where applicable

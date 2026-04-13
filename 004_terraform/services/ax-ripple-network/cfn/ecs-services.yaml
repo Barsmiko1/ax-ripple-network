@@ -418,4 +418,3 @@ Outputs:
     Value: !Sub "ripple-api.${Environment}.local"
     Export:
       Name: !Sub "${AWS::StackName}-ApiNodeDiscoveryEndpoint"
-

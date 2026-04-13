@@ -47,6 +47,7 @@ header() { echo ""; echo -e "${BOLD}${BLUE}════════════�
 # Configuration — load from Terraform outputs or environment
 # =============================================================================
 CLUSTER_NAME="${ECS_CLUSTER_NAME:-}"
+# shellcheck disable=SC2034
 VALIDATOR_SERVICE="${VALIDATOR_SERVICE_NAME:-}"
 API_SERVICE="${API_SERVICE_NAME:-}"
 HAPROXY_IP="${HAPROXY_PUBLIC_IP:-}"
@@ -288,7 +289,7 @@ for i in $(seq 1 6); do
   echo -e "    Request ${i}: → ${NODE}"
 done
 
-UNIQUE_NODES=$(echo "${NODES}" | tr ' ' '\n' | sort -u | grep -v '^$' | wc -l | tr -d ' ')
+UNIQUE_NODES=$(echo "${NODES}" | tr ' ' '\n' | sort -u | grep -vc '^$')
 if [ "${UNIQUE_NODES}" -ge 2 ]; then
   pass "HAProxy round-robin distributing to ${UNIQUE_NODES} different backend nodes"
 else

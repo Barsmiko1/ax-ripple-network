@@ -282,7 +282,7 @@ if [ ! -d "node_modules" ]; then
   npm install --silent 2>/dev/null
 fi
 
-> "${DEMO_LOG}"
+: > "${DEMO_LOG}"
 HAPROXY_HOST="${HAPROXY_IP}" \
   RIPPLED_WS_URL="${WS_URL}" \
   RIPPLED_HTTP_URL="${HTTP_URL}" \
@@ -550,7 +550,7 @@ if [ -n "${STATS_CSV}" ]; then
   echo ""
 
   # Dynamically parse and display actual HAProxy state
-  DOWN_COUNT=$(echo "${STATS_CSV}" | python3 -c "
+  echo "${STATS_CSV}" | python3 -c "
 import sys, csv
 reader = csv.reader(sys.stdin)
 down = 0
@@ -567,7 +567,7 @@ for row in reader:
     else:
         print(f'    \033[1;33m● {pxname}/{svname}: {status}\033[0m')
 print(f'__DOWN_COUNT__:{down}')
-" 2>/dev/null | tee /tmp/ax-haproxy-status.tmp | grep -v "__DOWN_COUNT__")
+" 2>/dev/null | tee /tmp/ax-haproxy-status.tmp | grep -v "__DOWN_COUNT__"
 
   DOWN_BACKENDS=$(grep "__DOWN_COUNT__" /tmp/ax-haproxy-status.tmp 2>/dev/null | cut -d: -f2 || echo "0")
   rm -f /tmp/ax-haproxy-status.tmp

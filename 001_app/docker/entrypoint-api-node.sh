@@ -24,7 +24,7 @@ echo "[entrypoint] Starting rippled API node..."
 # 1. Write validators.txt (private network UNL)
 #    Forcefully overwrite the default mainnet validators.txt from the package.
 # ─────────────────────────────────────────────────────────────────────────────
-> "${VALIDATORS_FILE}" 2>/dev/null || true
+: > "${VALIDATORS_FILE}" 2>/dev/null || true
 
 if [ -n "${VALIDATOR_PUBLIC_KEYS:-}" ]; then
   echo "[entrypoint] Writing validators.txt"
@@ -53,7 +53,7 @@ if [ -n "${PEER_IPS:-}" ]; then
     echo "[ips_fixed]"
     IFS=',' read -ra PEERS <<< "${PEER_IPS}"
     for peer in "${PEERS[@]}"; do
-      trimmed=$(echo "${peer}" | sed 's/^[[:space:]]*//')
+      trimmed="${peer#"${peer%%[![:space:]]*}"}"
       [ -n "${trimmed}" ] && echo "${trimmed}"
     done
   } >> "${CONFIG_FILE}"

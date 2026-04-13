@@ -236,7 +236,13 @@ Resources:
             - /bin/sh
             - -c
           Command:
-            - "printf '%s' \"$PROM_YML\" > /etc/prometheus/prometheus.yml && exec /bin/prometheus --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus --storage.tsdb.retention.time=7d --web.enable-lifecycle"
+            - >-
+              printf '%s' "$PROM_YML" > /etc/prometheus/prometheus.yml &&
+              exec /bin/prometheus
+              --config.file=/etc/prometheus/prometheus.yml
+              --storage.tsdb.path=/prometheus
+              --storage.tsdb.retention.time=7d
+              --web.enable-lifecycle
           Environment:
             - Name: PROM_YML
               Value: !Sub |
@@ -358,4 +364,3 @@ Outputs:
     Value: !Ref GrafanaService
     Export:
       Name: !Sub "${AWS::StackName}-GrafanaServiceArn"
-

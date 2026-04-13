@@ -366,4 +366,3 @@ Outputs:
     Value: !Sub "http://${HAProxyEIP.PublicIp}:8404/stats"
     Export:
       Name: !Sub "${AWS::StackName}-HAProxyStatsEndpoint"
-

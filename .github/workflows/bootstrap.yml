@@ -296,4 +296,5 @@ jobs:
           echo "| Grafana Dashboard Provisioned | ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| **Grafana URL** | http://${{ env.HAPROXY_IP }}:3000/d/ax-ripple-network |" >> $GITHUB_STEP_SUMMARY
           echo "| **Prometheus URL** | http://${{ env.HAPROXY_IP }}:9090 |" >> $GITHUB_STEP_SUMMARY
-
+          echo "| **Atlantis URL** | http://${{ env.HAPROXY_IP }}:4141 |" >> $GITHUB_STEP_SUMMARY
+          echo "| **HAProxy Stats** | http://${{ env.HAPROXY_IP }}:8404/stats |" >> $GITHUB_STEP_SUMMARY

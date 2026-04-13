@@ -1,10 +1,10 @@
 version: 3
 automerge: false
-parallel_plan: true
+parallel_plan: false
 parallel_apply: false
 
 # =============================================================================
-# Atlantis PR-Driven Terraform Workflow — Modular Architecture
+# Atlantis PR-Driven Terraform Workflow — Multi-Environment Architecture
 # =============================================================================
 #
 # Three independent Terraform root modules, each with its own state:
@@ -13,73 +13,153 @@ parallel_apply: false
 #   2. ax-ripple-network    → Rippled validators, API nodes, HAProxy, observability
 #   3. atlantis             → Atlantis server running on the shared ECS cluster
 #
+# Each module supports multiple environments (dev, prod) via:
+#   - Separate Atlantis projects per environment
+#   - Terraform workspaces to isolate state (env:/<workspace>/key)
+#   - Environment-specific tfvars files
+#
+# Atlantis autoplan:
+#   - Detects which files changed and runs plan for ALL environments
+#     that share those files (e.g. changing main.tf plans both dev AND prod)
+#   - Changing only environments/dev.tfvars plans dev only
+#   - Changing only environments/prod.tfvars plans prod only
+#
 # Deployment order:
 #   shared-infra MUST be applied before any service.
 #   Services can be applied independently of each other.
 #
-# Flow:
-#   PR opened/updated → Atlantis auto-runs `terraform plan` per modified project
-#   PR approved       → Developer comments `atlantis apply -p <project-name>`
-#   Atlantis          → `terraform apply` → CloudFormation → AWS
+# Commands:
+#   atlantis plan -p shared-infra-dev          # plan dev shared-infra
+#   atlantis plan -p shared-infra-prod         # plan prod shared-infra
+#   atlantis apply -p ax-ripple-network-dev    # apply dev ripple network
+#   atlantis apply -p ax-ripple-network-prod   # apply prod ripple network
 # =============================================================================
 
 projects:
+  # ===========================================================================
+  # DEV Environment
+  # ===========================================================================
+
   # ---------------------------------------------------------------------------
-  # Shared Infrastructure (deploy FIRST)
+  # Shared Infrastructure — DEV
   # ---------------------------------------------------------------------------
-  - name: shared-infra
+  - name: shared-infra-dev
     dir: 004_terraform/shared-infra
-    workspace: default
+    workspace: dev
     terraform_version: v1.5.0
     autoplan:
       when_modified:
         - "**/*.tf"
-        - "**/*.tfvars"
+        - "environments/dev.tfvars"
         - "cfn/**/*.yaml"
       enabled: true
     apply_requirements:
       - approved
       - mergeable
-    workflow: shared-infra
+    workflow: dev-shared-infra
 
   # ---------------------------------------------------------------------------
-  # AX Ripple Network Service
+  # AX Ripple Network Service — DEV
   # ---------------------------------------------------------------------------
-  - name: ax-ripple-network
+  - name: ax-ripple-network-dev
     dir: 004_terraform/services/ax-ripple-network
-    workspace: default
+    workspace: dev
     terraform_version: v1.5.0
     autoplan:
       when_modified:
         - "**/*.tf"
-        - "**/*.tfvars"
+        - "environments/dev.tfvars"
         - "cfn/**/*.yaml"
       enabled: true
     apply_requirements:
       - approved
       - mergeable
-    workflow: service
+    workflow: dev-service
 
   # ---------------------------------------------------------------------------
-  # Atlantis Service
+  # Atlantis Service — DEV
   # ---------------------------------------------------------------------------
-  - name: atlantis
+  - name: atlantis-dev
     dir: 004_terraform/services/atlantis
-    workspace: default
+    workspace: dev
     terraform_version: v1.5.0
     autoplan:
       when_modified:
         - "**/*.tf"
-        - "**/*.tfvars"
+        - "environments/dev.tfvars"
         - "cfn/**/*.yaml"
       enabled: true
     apply_requirements:
       - approved
       - mergeable
-    workflow: service
+    workflow: dev-service
 
+  # ===========================================================================
+  # PROD Environment (uncomment when ready to deploy prod)
+  # ===========================================================================
+
+  # # -------------------------------------------------------------------------
+  # # Shared Infrastructure — PROD
+  # # -------------------------------------------------------------------------
+  # - name: shared-infra-prod
+  #   dir: 004_terraform/shared-infra
+  #   workspace: prod
+  #   terraform_version: v1.5.0
+  #   autoplan:
+  #     when_modified:
+  #       - "**/*.tf"
+  #       - "environments/prod.tfvars"
+  #       - "cfn/**/*.yaml"
+  #     enabled: true
+  #   apply_requirements:
+  #     - approved
+  #     - mergeable
+  #   workflow: prod-shared-infra
+
+  # # -------------------------------------------------------------------------
+  # # AX Ripple Network Service — PROD
+  # # -------------------------------------------------------------------------
+  # - name: ax-ripple-network-prod
+  #   dir: 004_terraform/services/ax-ripple-network
+  #   workspace: prod
+  #   terraform_version: v1.5.0
+  #   autoplan:
+  #     when_modified:
+  #       - "**/*.tf"
+  #       - "environments/prod.tfvars"
+  #       - "cfn/**/*.yaml"
+  #     enabled: true
+  #   apply_requirements:
+  #     - approved
+  #     - mergeable
+  #   workflow: prod-service
+
+  # # -------------------------------------------------------------------------
+  # # Atlantis Service — PROD
+  # # -------------------------------------------------------------------------
+  # - name: atlantis-prod
+  #   dir: 004_terraform/services/atlantis
+  #   workspace: prod
+  #   terraform_version: v1.5.0
+  #   autoplan:
+  #     when_modified:
+  #       - "**/*.tf"
+  #       - "environments/prod.tfvars"
+  #       - "cfn/**/*.yaml"
+  #     enabled: true
+  #   apply_requirements:
+  #     - approved
+  #     - mergeable
+  #   workflow: prod-service
+
+# =============================================================================
+# Workflows — one per environment × module type
+# =============================================================================
 workflows:
-  shared-infra:
+  # ---------------------------------------------------------------------------
+  # DEV workflows
+  # ---------------------------------------------------------------------------
+  dev-shared-infra:
     plan:
       steps:
         - init:
@@ -90,7 +170,7 @@ workflows:
       steps:
         - apply
 
-  service:
+  dev-service:
     plan:
       steps:
         - init:
@@ -100,3 +180,28 @@ workflows:
     apply:
       steps:
         - apply
+
+  # ---------------------------------------------------------------------------
+  # PROD workflows (uncomment when ready)
+  # ---------------------------------------------------------------------------
+  # prod-shared-infra:
+  #   plan:
+  #     steps:
+  #       - init:
+  #           extra_args: ["-upgrade"]
+  #       - plan:
+  #           extra_args: ["-var-file=environments/prod.tfvars"]
+  #   apply:
+  #     steps:
+  #       - apply
+
+  # prod-service:
+  #   plan:
+  #     steps:
+  #       - init:
+  #           extra_args: ["-upgrade"]
+  #       - plan:
+  #           extra_args: ["-var-file=environments/prod.tfvars"]
+  #   apply:
+  #     steps:
+  #       - apply
