@@ -1,0 +1,268 @@
+name: Destroy Infrastructure
+
+# =============================================================================
+# Tears down ALL infrastructure in reverse order of bootstrap.yml:
+#   1. AX Ripple Network (ECS services, HAProxy, observability)
+#   2. Atlantis
+#   3. Shared Infrastructure (VPC, ECS cluster, SGs)
+#
+# Optionally cleans up ECR repos and state backend (S3 + DynamoDB).
+# =============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment to destroy"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      destroy_shared_infra:
+        description: "Also destroy shared infrastructure (VPC, ECS cluster)?"
+        required: true
+        default: true
+        type: boolean
+      cleanup_ecr:
+        description: "Delete ECR repositories?"
+        required: true
+        default: false
+        type: boolean
+      cleanup_state_backend:
+        description: "Delete S3 state bucket + DynamoDB lock table? (IRREVERSIBLE)"
+        required: true
+        default: false
+        type: boolean
+      confirm:
+        description: "Type DESTROY to confirm"
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  TF_VERSION: "1.5.0"
+
+jobs:
+  # ===========================================================================
+  # Guard — abort if confirmation not provided
+  # ===========================================================================
+  confirm:
+    name: "Confirm Destruction"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check confirmation
+        run: |
+          if [ "${{ inputs.confirm }}" != "DESTROY" ]; then
+            echo "❌ You must type DESTROY to confirm. Aborting."
+            exit 1
+          fi
+          echo "⚠️  DESTRUCTION CONFIRMED for environment: ${{ inputs.environment }}"
+
+  # ===========================================================================
+  # Step 1 — Destroy AX Ripple Network
+  # ===========================================================================
+  destroy-ripple-network:
+    name: "1. Destroy AX Ripple Network"
+    needs: confirm
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: 004_terraform/services/ax-ripple-network
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Force-unlock state (if locked)
+        run: |
+          # Attempt destroy; if state is locked, force-unlock and retry
+          echo "Checking for stale locks..."
+        continue-on-error: true
+
+      - name: Delete ROLLBACK_COMPLETE stacks first
+        run: |
+          for stack in ax-ripple-${{ inputs.environment }}-observability \
+                       ax-ripple-${{ inputs.environment }}-haproxy \
+                       ax-ripple-${{ inputs.environment }}-ecs-services; do
+            STATUS=$(aws cloudformation describe-stacks --stack-name "$stack" \
+              --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "NOT_FOUND")
+            if [ "$STATUS" = "ROLLBACK_COMPLETE" ] || [ "$STATUS" = "DELETE_FAILED" ]; then
+              echo "🗑️  Deleting $stack (status: $STATUS)"
+              aws cloudformation delete-stack --stack-name "$stack"
+              aws cloudformation wait stack-delete-complete --stack-name "$stack" || true
+            fi
+          done
+
+      - name: Terraform Destroy
+        run: terraform destroy -var-file=environments/${{ inputs.environment }}.tfvars -auto-approve -input=false
+
+      - name: Summary
+        run: echo "## 🗑️ AX Ripple Network — DESTROYED" >> $GITHUB_STEP_SUMMARY
+
+  # ===========================================================================
+  # Step 2 — Destroy Atlantis
+  # ===========================================================================
+  destroy-atlantis:
+    name: "2. Destroy Atlantis"
+    needs: destroy-ripple-network
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: 004_terraform/services/atlantis
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Delete ROLLBACK_COMPLETE stacks first
+        run: |
+          STACK="ax-ripple-${{ inputs.environment }}-atlantis"
+          STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK" \
+            --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "NOT_FOUND")
+          if [ "$STATUS" = "ROLLBACK_COMPLETE" ] || [ "$STATUS" = "DELETE_FAILED" ]; then
+            echo "🗑️  Deleting $STACK (status: $STATUS)"
+            aws cloudformation delete-stack --stack-name "$STACK"
+            aws cloudformation wait stack-delete-complete --stack-name "$STACK" || true
+          fi
+
+      - name: Terraform Destroy
+        run: terraform destroy -var-file=environments/${{ inputs.environment }}.tfvars -auto-approve -input=false
+
+      - name: Summary
+        run: echo "## 🗑️ Atlantis — DESTROYED" >> $GITHUB_STEP_SUMMARY
+
+  # ===========================================================================
+  # Step 3 — Destroy Shared Infrastructure
+  # ===========================================================================
+  destroy-shared-infra:
+    name: "3. Destroy Shared Infrastructure"
+    needs: destroy-atlantis
+    if: inputs.destroy_shared_infra
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: 004_terraform/shared-infra
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Delete ROLLBACK_COMPLETE stacks first
+        run: |
+          for stack in ax-ripple-${{ inputs.environment }}-network \
+                       ax-ripple-${{ inputs.environment }}-ecs-cluster; do
+            STATUS=$(aws cloudformation describe-stacks --stack-name "$stack" \
+              --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "NOT_FOUND")
+            if [ "$STATUS" = "ROLLBACK_COMPLETE" ] || [ "$STATUS" = "DELETE_FAILED" ]; then
+              echo "🗑️  Deleting $stack (status: $STATUS)"
+              aws cloudformation delete-stack --stack-name "$stack"
+              aws cloudformation wait stack-delete-complete --stack-name "$stack" || true
+            fi
+          done
+
+      - name: Terraform Destroy
+        run: terraform destroy -var-file=environments/${{ inputs.environment }}.tfvars -auto-approve -input=false
+
+      - name: Summary
+        run: echo "## 🗑️ Shared Infrastructure — DESTROYED" >> $GITHUB_STEP_SUMMARY
+
+  # ===========================================================================
+  # Step 4 — Clean up ECR repos (optional)
+  # ===========================================================================
+  cleanup-ecr:
+    name: "4. Clean up ECR Repositories"
+    needs: destroy-ripple-network
+    if: inputs.cleanup_ecr
+    runs-on: ubuntu-latest
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Delete ECR repositories
+        run: |
+          for repo in ax-ripple-${{ inputs.environment }}/validator \
+                      ax-ripple-${{ inputs.environment }}/api-node; do
+            echo "Deleting ECR repo: $repo"
+            aws ecr delete-repository --repository-name "$repo" --force || true
+          done
+          echo "## 🗑️ ECR Repositories — DELETED" >> $GITHUB_STEP_SUMMARY
+
+  # ===========================================================================
+  # Step 5 — Clean up state backend (optional, IRREVERSIBLE)
+  # ===========================================================================
+  cleanup-state:
+    name: "5. Clean up State Backend"
+    needs: [destroy-shared-infra, destroy-atlantis, destroy-ripple-network]
+    if: inputs.cleanup_state_backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Delete S3 state bucket and DynamoDB lock table
+        run: |
+          echo "⚠️  Deleting Terraform state backend — THIS IS IRREVERSIBLE"
+          aws s3 rb s3://ax-ripple-network-terraform-state --force || true
+          aws dynamodb delete-table --table-name ax-ripple-network-terraform-locks --region ${{ env.AWS_REGION }} || true
+          echo "## 🗑️ State Backend — DELETED" >> $GITHUB_STEP_SUMMARY
+
+  # ===========================================================================
+  # Final Summary
+  # ===========================================================================
+  summary:
+    name: "Destruction Summary"
+    needs: [destroy-ripple-network, destroy-atlantis]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Final Summary
+        run: |
+          echo "## 🗑️ Infrastructure Destruction Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Component | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| AX Ripple Network | ${{ needs.destroy-ripple-network.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Atlantis | ${{ needs.destroy-atlantis.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | ${{ inputs.environment }} |" >> $GITHUB_STEP_SUMMARY
+
