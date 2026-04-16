@@ -220,6 +220,77 @@ jobs:
             echo "✅ Cloud Map namespace cleaned"
           fi
 
+      - name: Clean up VPC dependencies (ENIs, SGs, endpoints)
+        run: |
+          VPC_ID=$(aws cloudformation describe-stacks \
+            --stack-name "ax-ripple-${{ inputs.environment }}-network" \
+            --query 'Stacks[0].Outputs[?OutputKey==`VpcId`].OutputValue' \
+            --output text 2>/dev/null || echo "")
+
+          if [ -z "$VPC_ID" ] || [ "$VPC_ID" = "None" ]; then
+            echo "No VPC found — skipping cleanup"
+            exit 0
+          fi
+          echo "Cleaning VPC: $VPC_ID"
+
+          # 1. Delete orphan ENIs (left by ECS, Lambda, etc.)
+          ENIS=$(aws ec2 describe-network-interfaces \
+            --filters Name=vpc-id,Values="$VPC_ID" \
+            --query 'NetworkInterfaces[?Status==`available`].NetworkInterfaceId' \
+            --output text || echo "")
+          for ENI in $ENIS; do
+            echo "  Deleting ENI: $ENI"
+            aws ec2 delete-network-interface --network-interface-id "$ENI" || true
+          done
+
+          # 2. Detach and delete in-use ENIs (non-primary)
+          ATTACHED_ENIS=$(aws ec2 describe-network-interfaces \
+            --filters Name=vpc-id,Values="$VPC_ID" \
+            --query 'NetworkInterfaces[?Attachment.DeviceIndex!=`0`].[NetworkInterfaceId,Attachment.AttachmentId]' \
+            --output text || echo "")
+          while IFS=$'\t' read -r ENI ATTACH; do
+            [ -z "$ENI" ] && continue
+            echo "  Detaching ENI: $ENI (attachment: $ATTACH)"
+            aws ec2 detach-network-interface --attachment-id "$ATTACH" --force || true
+            sleep 3
+            aws ec2 delete-network-interface --network-interface-id "$ENI" || true
+          done <<< "$ATTACHED_ENIS"
+
+          # 3. Delete VPC endpoints
+          ENDPOINTS=$(aws ec2 describe-vpc-endpoints \
+            --filters Name=vpc-id,Values="$VPC_ID" \
+            --query 'VpcEndpoints[].VpcEndpointId' --output text || echo "")
+          for EP in $ENDPOINTS; do
+            echo "  Deleting VPC endpoint: $EP"
+            aws ec2 delete-vpc-endpoints --vpc-endpoint-ids "$EP" || true
+          done
+
+          # 4. Delete non-default security groups (Retain policy leftovers)
+          SGS=$(aws ec2 describe-security-groups \
+            --filters Name=vpc-id,Values="$VPC_ID" \
+            --query 'SecurityGroups[?GroupName!=`default`].GroupId' \
+            --output text || echo "")
+          for SG in $SGS; do
+            echo "  Revoking ingress/egress rules for SG: $SG"
+            aws ec2 revoke-security-group-ingress --group-id "$SG" \
+              --security-group-rule-ids $(aws ec2 describe-security-group-rules \
+                --filters Name=group-id,Values="$SG" \
+                --query 'SecurityGroupRules[?!IsEgress].SecurityGroupRuleId' \
+                --output text) 2>/dev/null || true
+            aws ec2 revoke-security-group-egress --group-id "$SG" \
+              --security-group-rule-ids $(aws ec2 describe-security-group-rules \
+                --filters Name=group-id,Values="$SG" \
+                --query 'SecurityGroupRules[?IsEgress].SecurityGroupRuleId' \
+                --output text) 2>/dev/null || true
+          done
+          # Delete SGs after clearing rules
+          for SG in $SGS; do
+            echo "  Deleting SG: $SG"
+            aws ec2 delete-security-group --group-id "$SG" || true
+          done
+
+          echo "✅ VPC dependencies cleaned"
+
       - name: Delete ROLLBACK_COMPLETE or DELETE_FAILED stacks first
         run: |
           for stack in ax-ripple-${{ inputs.environment }}-network \
