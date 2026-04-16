@@ -184,7 +184,43 @@ jobs:
       - name: Terraform Init
         run: terraform init
 
-      - name: Delete ROLLBACK_COMPLETE stacks first
+      - name: Clean up Cloud Map namespace (delete all services + instances)
+        run: |
+          echo "🔍 Finding Cloud Map namespace for environment: ${{ inputs.environment }}"
+          NS_ID=$(aws cloudformation describe-stacks \
+            --stack-name "ax-ripple-${{ inputs.environment }}-ecs-cluster" \
+            --query 'Stacks[0].Outputs[?OutputKey==`ServiceDiscoveryNamespaceId`].OutputValue' \
+            --output text 2>/dev/null || echo "")
+
+          if [ -z "$NS_ID" ] || [ "$NS_ID" = "None" ]; then
+            echo "No namespace found — skipping cleanup"
+          else
+            echo "Namespace: $NS_ID"
+            # List all services in the namespace
+            SERVICES=$(aws servicediscovery list-services \
+              --filters Name=NAMESPACE_ID,Values="$NS_ID",Condition=EQ \
+              --query 'Services[].Id' --output text 2>/dev/null || echo "")
+
+            for SVC_ID in $SERVICES; do
+              echo "  Cleaning service: $SVC_ID"
+              # Deregister all instances first
+              INSTANCES=$(aws servicediscovery list-instances \
+                --service-id "$SVC_ID" \
+                --query 'Instances[].Id' --output text 2>/dev/null || echo "")
+              for INST_ID in $INSTANCES; do
+                echo "    Deregistering instance: $INST_ID"
+                aws servicediscovery deregister-instance \
+                  --service-id "$SVC_ID" --instance-id "$INST_ID" || true
+              done
+              # Wait a moment for deregistration to propagate
+              sleep 5
+              echo "    Deleting service: $SVC_ID"
+              aws servicediscovery delete-service --id "$SVC_ID" || true
+            done
+            echo "✅ Cloud Map namespace cleaned"
+          fi
+
+      - name: Delete ROLLBACK_COMPLETE or DELETE_FAILED stacks first
         run: |
           for stack in ax-ripple-${{ inputs.environment }}-network \
                        ax-ripple-${{ inputs.environment }}-ecs-cluster; do
